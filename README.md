@@ -15,9 +15,9 @@
 
 # <img src="public/images/hybrid_icon.png" width="30"> Bose SoundTouch Hybrid 2026 - V3.4
 
-**A free, open-source private cloud streaming service replacing the Bose Cloud Service to maintain 100% of the smart speaker functionality of your SoundTouch 10, 20, & 30 Speakers and Wireless Link. Physical Presets Included!**
+**A free, open-source private cloud streaming service replacing the Bose Cloud Service to maintain 100% of the smart speaker functionality of your SoundTouch 10, 20, 30, Wave IV Speakers and Wireless Link Adapter.  and Wireless Link. Physical Presets Included!**
 
-<img src="public/images/bose_icon.png" width="20">  The Bose shut down of their SoundTouch Cloud Service (May 2026) degraded the Bose SoundTouch intelligent, multi-room audio speakers into "dumb" receivers dependent on a phone's active connection. This represents a **significant loss of functionality** for the SoundTouch 10, 20, and 30 Speakers and Wireless Link Adapter. 
+<img src="public/images/bose_icon.png" width="20">  The Bose shut down of their SoundTouch Cloud Service (May 2026) degraded the Bose SoundTouch intelligent, multi-room audio speakers into "dumb" receivers dependent on a phone's active connection. This represents a **significant loss of functionality** for the SoundTouch 10, 20, 30, Wave IV Speakers and Wireless Link Adapter. 
 
 <img src="public/images/hybrid_icon.png" width="20">  **This solution provides a self-hosted "Private Cloud" to emulate and replace the Bose Cloud Service**. It runs locally on your network (NAS, PC, etc.) and intercepts and actively manages the complex server handshakes required to keep the SoundTouch Speakers authenticated and functional, providing the **same phone-free audio streaming capabilities** as the original SoundTouch Application and Speakers. 
 
