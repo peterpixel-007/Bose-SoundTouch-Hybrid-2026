@@ -1,5 +1,5 @@
 # ==============================================================================
-# BOSE SOUNDTOUCH HYBRID 2026 V3.4
+# BOSE SOUNDTOUCH HYBRID 2026 V3.4.4
 # ==============================================================================
 # --- VERSION TAGGING ---
 # Use the word 'latest' on the image line below to always pull the newest 
@@ -28,25 +28,31 @@
 # 2. docker compose pull
 # 3. docker compose up -d
 # 4. docker image prune -f
-# ==============================================================================
+# ================================================================================
 
 services:
   bose-hybrid:
-    image: ghcr.io/tjgigs/bose-soundtouch-hybrid-2026:v3.4.2
+    image: ghcr.io/tjgigs/bose-soundtouch-hybrid-2026:v3.4.4
     
     container_name: bose-soundtouch-hybrid
     network_mode: "host"
-    user: "root"
     environment:
       - NODE_ENV=production
-      - TRUST_PROXY=${TRUST_PROXY:-false}   
+      - TRUST_PROXY=${TRUST_PROXY:-false} 
+
+      # ==========================================================
+      # TIMEZONE SETTING (REQUIRED FOR ACCURATE LOGS)
+      # Find your exact timezone format here: https://nodatime.org/TimeZones
+      # Example: America/New_York, Europe/London, Australia/Sydney
+      # ==========================================================
+      - TZ=America/Los_Angeles  # <-- Change this to your local timezone    
+    
     volumes:
-      - /etc/localtime:/etc/localtime:ro
       - /var/run/docker.sock:/var/run/docker.sock
       
-      # ==========================================================
+      # ==================================================
       # VOLUME CONFIGURATION: CHOOSE METHOD A OR METHOD B
-      # ==========================================================
+      # ==================================================
       
       # METHOD A: For Plain Docker Compose / CLI Users (Standard Active)
       - ./:/app/config   

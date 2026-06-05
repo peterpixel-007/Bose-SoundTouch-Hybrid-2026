@@ -237,6 +237,7 @@
   let state = { source: 'spotify', filter: 'playlist', tab: 'library', favFilter: 'all' }; 
   let selectedUuid = null;
   let npInterval = null;
+  let currentSearchOrder = ['global', 'radio', 'nas', 'spotify']; // <-- ADD THIS DEFAULT
   
   // --- THEME MANAGEMENT ---
   // Applies the theme immediately to prevent flash of unstyled content
@@ -249,10 +250,24 @@
   // Listens for theme changes in other tabs to sync immediately.
   window.addEventListener('storage', (e) => { if (e.key === 'theme') applyTheme(); });
 
+// --- FETCH GLOBAL SETTINGS ---
+  async function loadUserPreferences() {
+      try {
+          // Uses existing api() wrapper to safely fetch settings
+          const settings = await api('/api/admin/settings');
+          if (settings && settings.searchMenuOrder && Array.isArray(settings.searchMenuOrder)) {
+              currentSearchOrder = settings.searchMenuOrder;
+          }
+      } catch (e) {
+          console.error("Failed to load global search order from server. Using defaults.", e);
+      }
+  }
+
   // --- INITIALIZATION ---
-  window.onload = function() { 
-      buildSearchMenu();
-	  loadProviders().then(() => loadLibrary()); // <-- NEW: Load providers BEFORE library	  
+  window.onload = async function() { 
+      await loadUserPreferences(); // 1. Wait for server settings FIRST
+      buildSearchMenu();           // 2. Draw the menu using those settings
+      loadProviders().then(() => loadLibrary()); 
       fetchSpeakers(); 
   }
   
@@ -289,27 +304,23 @@ async function loadProviders() {
       'global': `<button class="source-btn" onclick="setSource('global')"><span style="font-size:1.2em;">🌍</span> Global</button>`
   };
 
-  function buildSearchMenu() {
-      // 1. Check local storage for user preference
-      const savedOrder = localStorage.getItem('bose_search_order');
-      const order = savedOrder ? JSON.parse(savedOrder) : ['global','radio', 'nas','spotify' ]; // Your correct default
-
+function buildSearchMenu() {
       const container = document.getElementById('dynamic-source-row');
       let html = '';
 
-      // 2. Build the HTML string based on the array order
-      order.forEach(sourceKey => {
+      // Build the HTML string based on the server-provided array order
+      currentSearchOrder.forEach(sourceKey => {
           if (SOURCE_BUTTON_TEMPLATES[sourceKey]) {
               html += SOURCE_BUTTON_TEMPLATES[sourceKey];
           }
       });
 
-      // 3. Inject it into the page
+      // Inject it into the page
       container.innerHTML = html;
 
-      // 4. Automatically highlight the first item in the list
-      if (order.length > 0) {
-          setSource(order[0]); 
+      // Automatically highlight the first item in the list
+      if (currentSearchOrder.length > 0) {
+          setSource(currentSearchOrder[0]); 
       }
   }
 

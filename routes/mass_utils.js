@@ -295,6 +295,31 @@ router.post('/restart_ma', async (req, res) => {
     }
 });
 
+router.post('/rescan_ma', async (req, res) => {
+    try {
+        const aggressive = req.body.aggressive || false;
+        const provider = req.body.provider || 'dlna'; 
+
+        if (aggressive) {
+            console.log(`\n[Admin] 🚨 Triggering Aggressive MA Reload for: ${provider.toUpperCase()}`);
+        } else {
+            console.log(`\n[Admin] 🔄 Triggering MA Soft Rescan for: ${provider.toUpperCase()}...`);
+        }
+        
+        const success = await mass.forceRescan(aggressive, provider);
+        
+        if (success) {
+            res.json({ success: true, message: `Recovery command sent to Music Assistant (${provider})` });
+        } else {
+            res.status(500).json({ error: "Failed to communicate with MA API" });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+
+
 module.exports = {
     router, 
     dockerAction,

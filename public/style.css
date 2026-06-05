@@ -877,6 +877,7 @@ input:disabled + label {
 
 #mass-error-banner .btn-dismiss { background: transparent; color: #ccc; border: 1px solid #555; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
 #mass-error-banner .btn-restart { background: #e74c3c; color: #fff; border: none; padding: 8px 15px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 0.9em; }
+#mass-error-banner .btn-reconnect { background: var(--radio); color: #fff; border: none; padding: 8px 15px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 0.9em; }
 
 /* --- REUSABLE SYSTEM TOOL COMPONENTS --- */
 .warning-box {
@@ -1005,4 +1006,23 @@ input:disabled + label {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
+}
+/* --- SYSTEM VERSION BADGES --- */
+.badge-pill {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.65em;
+    font-weight: bold;
+    color: var(--text); 
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    padding: 3px 8px;
+    border-radius: 4px;
+    line-height: 1;
+}
+.badge-pill img {
+    height: 10px;
+    width: auto;
+    opacity: 0.8;
 }

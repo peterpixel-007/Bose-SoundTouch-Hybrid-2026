@@ -556,6 +556,23 @@ async function executeCommand(target, command, options = {}) {
     return await sendWithRetry(id, ip, command, { queue_id: id }, options);
 }
 
+
+// Replace your existing sendAdminCommand in mass.js
+async function sendAdminCommand(command, args = {}) {
+    const token = await getToken();
+    if (!token) throw new Error("MASS Auth token unavailable");
+    
+    const res = await client.post(`${BASE_URL}`, { 
+        command: command, args: args, message_id: Date.now() 
+    }, { headers: { 'Authorization': `Bearer ${token}` } });
+
+    // 🚨 THE FIX: Catch MA JSON-RPC errors hiding inside HTTP 200 OK responses
+    if (res.data && res.data.error) {
+        throw new Error(res.data.error.message || JSON.stringify(res.data.error));
+    }
+    return res.data;
+}
+
 // =======================================================================
 // SECTION: HEALTH WARNING (AUDIO BEEP)
 // =======================================================================
@@ -580,8 +597,49 @@ async function playHealthWarning(speakerIp) {
         console.error(`[Alert] ❌ Failed to play warning on ${speakerIp}`);
     }
 }
+// =======================================================================
+// SECTION: NETWORK RECOVERY & KEEP-ALIVE (DLNA & AIRPLAY)
+// =======================================================================
+async function forceRescan(aggressive = false, targetProvider = 'dlna') {
+    try {
+        if (aggressive) {
+            console.log(`[MASS] 🚨 Aggressive Recovery: Reloading the ${targetProvider.toUpperCase()} provider...`);
+            await sendAdminCommand('config/providers/reload', { instance_id: targetProvider });           
+            // Give the provider 1.5 seconds to boot up
+            await new Promise(r => setTimeout(r, 1500));
+            return true;
+        }
 
+        console.log(`[MASS] 🔄 Sending Soft Rescan (players/all) ping to Music Assistant...`);
+        await sendAdminCommand('players/all', {});
+        return true;
+        
+    } catch (err) {
+        // catches JSON errors from wrapper
+        console.error(`[MASS] ❌ Failed to send rescan command: ${err.response?.data || err.message}`);
+        return false;
+    }
+}
 // =======================================================================
 // SECTION 7: EXPORTS
 // =======================================================================
-module.exports = {play,playMedia,stop,next,previous,pause,clearQueue,getRawMetadata,getMetadata,getToken,BASE_URL,setPresetMemory,getPresetMemory,isRecovering,getHealth,resetHealth};
+module.exports = {
+    play,
+    playMedia,
+    stop,
+    next,
+    previous,
+    pause,
+    clearQueue,
+    getRawMetadata,
+    getMetadata,
+    getToken,
+    BASE_URL,
+    setPresetMemory,
+    getPresetMemory,
+    isRecovering,
+    getHealth,
+    resetHealth,
+    playHealthWarning, 
+    forceRescan      
+};

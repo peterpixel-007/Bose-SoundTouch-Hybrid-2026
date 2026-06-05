@@ -42,24 +42,29 @@ async function checkForUpdates() {
 const boseMassBannerHTML = `
 <div id="mass-error-banner">
     <div class="banner-header">
-        <span class="banner-title">⚠️ Music Assistant Error</span>
+        <span class="banner-title">?? Music Assistant Error</span>
         <button class="banner-close" onclick="dismissMassBanner()">&times;</button>
     </div>
     <div class="banner-body">
         Music Assistant reported a playback failure. How to fix it:
         <ul>
             <li>
-                <strong>Invalid Media (Empty album, dead stream, missing file):</strong><br>
-                No restart needed. You can <strong>Dismiss</strong> this message. It will also automatically clear the next time you successfully play a valid preset or library item on this same speaker.
+                <strong>Invalid Media (Empty album, dead stream):</strong><br>
+                No restart needed. <strong>Dismiss</strong> this message. It will clear on next successful playback.
             </li>
             <li>
                 <strong>Dropped DLNA Socket:</strong><br>
-                The connection to the speaker has died. You must click <strong>Restart Service</strong> below to recover.
+                The speaker connection dropped. Try a quick <strong>Force Reconnect</strong> first.
+            </li>
+            <li>
+                <strong>Server Locked Up:</strong><br>
+                If reconnecting fails, you must do a full <strong>Restart Service</strong>.
             </li>
         </ul>
     </div>
     <div class="banner-actions">
         <button class="btn-dismiss" onclick="dismissMassBanner()">Dismiss</button>
+        <button class="btn-reconnect" onclick="triggerAggressiveReconnect()">?? Force Reconnect</button>
         <button class="btn-restart" onclick="restartMassFromBanner(this)">Restart Service</button>
     </div>
 </div>
@@ -76,23 +81,73 @@ document.addEventListener("DOMContentLoaded", () => {
 
 window.isMaRestartingProcess = false;
 
+// --- MUSIC ASSISTANT HEALTH MONITOR (Runs every 5 seconds) ---
+// This loop constantly checks if the Music Assistant backend is healthy.
 setInterval(async () => {
+    // STEP 1: Safety Check
+    // If a restart or reconnect process is ALREADY happening, skip this check.
+    // We don't want to spam the server while it is actively trying to recover.
     if (window.isMaRestartingProcess) return;
+    
     try {
+        // STEP 2: Ping the Health Endpoint
+        // append a timestamp (?t=...) to prevent the browser from caching an old response.
         const res = await fetch(`/api/health?t=${Date.now()}`, { cache: 'no-store' });
         const h = await res.json();
         const banner = document.getElementById('mass-error-banner');
         
+        // STEP 3: Handle Unhealthy State (Connection Lost)
         if (h && h.healthy === false) {
-            // Added 'banner &&' to prevent null reference errors
-            if (banner && banner.style.display !== 'flex' && !banner.dataset.dismissed) banner.style.display = 'flex';
+            
+            // only proceed if the banner exists on the page, isn't already visible,
+            // and hasn't been manually dismissed by the user for this specific error instance.
+            if (banner && banner.style.display !== 'flex' && !banner.dataset.dismissed) {
+                
+                // --- NEW FEATURE: AUTO-RECOVERY INJECTION ---
+                // Before showing the error banner, check if the user enabled the "Auto-Reload" preference.
+                try {
+                    const prefRes = await fetch('/api/admin/settings');
+                    const prefs = await prefRes.json();
+                    
+                    // 'autoRestartMass' is the backend variable tied to our new "Auto-Reload" checkbox.
+                    if (prefs.autoRestartMass) {
+                        console.log("[UI] Auto-Recovery triggered via user preference.");
+                        
+                        // Mark the banner as temporarily "dismissed" so this loop doesn't spam trigger
+                        // while the auto-recovery is running.
+                        banner.dataset.dismissed = "true";
+                        
+                        // Trigger the aggressive reconnect silently (passing true for 'isAuto')
+                        // This function will automatically pause this health loop, and if it fails, 
+                        // it will force the banner to pop open on its own.
+                        triggerAggressiveReconnect(true);
+                        
+                        // EXIT the interval early! don't show the manual banner right now.
+                        return; 
+                    }
+                } catch (prefErr) {
+                    // If fetching preferences fails, quietly ignore it and fall through to show the banner.
+                    console.warn("[UI] Failed to check auto-recovery preference, falling back to manual banner.");
+                }
+                // --- END NEW FEATURE ---
+                
+                // ORIGINAL BEHAVIOR: Show the manual error banner if auto-recovery is OFF or failed to trigger.
+                banner.style.display = 'flex';
+            }
+            
         } else {
+            // STEP 4: Handle Healthy State (Recovery Successful)
+            // If the server reports healthy (true), make sure the banner is hidden.
             if (banner) {
                 banner.style.display = 'none';
+                
+                // Reset the dismissed tracker so the banner can appear again if the server breaks in the future.
                 banner.dataset.dismissed = "";
             }
         }
-    } catch(e) {}
+    } catch(e) {
+        // Catch network errors silently to prevent console spam if the server goes completely offline.
+    }
 }, 5000);
 
 function makeBannerDraggable() {
@@ -136,6 +191,24 @@ async function restartMassFromBanner(btn) {
     await fetch('/api/admin/restart_ma', { method: 'POST' });
     dismissMassBanner();
     setTimeout(() => { btn.innerText = "Restart Service"; btn.disabled = false; window.isMaRestartingProcess = false; }, 60000); 
+}
+
+async function triggerAggressiveReconnect() {
+    const btn = document.querySelector('#mass-error-banner .btn-reconnect');
+    if(btn) { btn.innerText = "? Reconnecting..."; btn.disabled = true; }
+
+    try {
+        const res = await fetch('/api/admin/reconnect', { method: 'POST' }); 
+        if (res.ok) {
+            dismissMassBanner();
+        } else {
+            alert("? Socket reconnect failed. You may need to use the full Restart Service option.");
+        }
+    } catch (e) {
+        console.error("[UI] Reconnect error:", e);
+    } finally {
+        if(btn) { btn.innerText = "?? Force Reconnect"; btn.disabled = false; }
+    }
 }
 
 // --- GLOBAL SYSTEM ACTIONS ---

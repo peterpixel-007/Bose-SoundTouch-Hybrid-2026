@@ -54,11 +54,27 @@
   let isUserInteracting = false; // Flags if the user is dragging a slider to pause polling.
   let isPollingFrozen = false; // Temporarily disables updates during network operations.
   let lastRenderedHTML = ""; // Caches the last HTML string to optimize DOM diffing.
+  let globalSettings = { mobileAutoSortSpeakers: true }; 
   
   // --- CONFIGURATION ---
   const POLLING_DELAY = 3500; // Time to wait after a command before resuming polling (Network latency mask).
   let volumeThrottleTimer = null; // Timer for debouncing main volume inputs.
   let interactionWatchdog = null; // Safety timer to resume polling if the user stops interacting.
+
+
+// --- FETCH USER SETTINGS ---
+// Pulls live preferences from settings.json on page load
+async function loadSettings() {
+      try {
+          // ADDED /api PREFIX HERE!
+          const res = await fetch('/api/admin/settings');
+          if (res.ok) {
+              globalSettings = await res.json();
+          }
+      } catch (e) {
+          console.error("Failed to load settings", e);
+      }
+}
 
   // ======================================================
   // 1. LOCK MANAGER (Optimistic UI Handler)
@@ -301,12 +317,12 @@
         }
     });
 
-    // 3. Scoring Phase: Sorts the Root devices based on Priority Tiers.
+		// 3. Scoring Phase: Sorts the Root devices based on Priority Tiers.
     roots.sort((a, b) => {
-		// --- DISABLE AUTO-SORT ON DESKTOP ---
-        // If the screen is wider than 768px (Desktop/Tablet), bypass the 
-        // priority scoring and just sort by the original JSON config order.
-        if (window.innerWidth > 768) {
+        // --- BYPASS AUTO-SORT ---
+        // Sort by the original JSON config order if the screen is Desktop/Tablet, 
+        // OR if the user has explicitly disabled the Mobile Auto-Sort preference.
+        if (window.innerWidth > 768 || globalSettings.mobileAutoSortSpeakers === false) {
             return a.originalIndex - b.originalIndex;
         }
 	
@@ -763,6 +779,7 @@
   }
 
   // Initial Load and Interval Setup
+  loadSettings(); 
   loadStatus();
   setInterval(loadStatus, 2000); 
   console.log("Bose Hybrid Controller - BACKEND-DRIVEN PAUSE");

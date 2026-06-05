@@ -23,15 +23,44 @@ const EXPECTATIONS = {}; // Tracks active UI Locks
 const TRACK_TIME_ANCHOR = {}; // Fixes Bose gapless time accumulation
 const WAKE_MEMORY = {}; // App Mem for Behavior 4
 const AUTO_RESUME_TIMERS = {}; // Tracks timers thy can be cancelled if interrupted
-// Strict evaluation: Feature is disabled (false) by default. 
-// It only activates (true) if AUTO_RESUME_PRESET=true is explicitly defined in the .env file.
-const AUTO_RESUME_PRESET = typeof process.env.AUTO_RESUME_PRESET === 'string' && process.env.AUTO_RESUME_PRESET.trim().toLowerCase() === 'true';
 
 // BAD_META: List of keywords indicating the speaker is not playing real content.
 const BAD_META = ["MUSIC ASSISTANT", "READY", "OBJECT", "LOADING...", "", "AIRPLAY", "UNKNOWN", "STOPPED", "STANDBY", "UPNP", "INVALID_SOURCE", "NULL"];
-
 // --- HELPERS (UNTOUCHED) ---
 const isBadMeta = (t) => !t || BAD_META.includes(t.toUpperCase());
+
+
+// --- DYNAMIC SETTINGS READER ---
+let settingsErrorLogged = false;
+function getAutoResumeSetting() {
+    try {
+        const settingsFile = path.join(process.cwd(), 'config', 'settings.json');
+        
+        if (fs.existsSync(settingsFile)) {
+            const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+            
+            // If it succeeds, reset the error flag so it warn again if it breaks later
+            settingsErrorLogged = false; 
+            
+            return settings.autoResumePreset === true;
+        } else {
+            // File doesn't exist
+            if (!settingsErrorLogged) {
+                console.log(`[DeviceState] ⚠️ settings.json not found. Defaulting auto-resume to FALSE.`);
+                settingsErrorLogged = true; //Marks the error as logged
+            }
+        }
+    } catch (e) {
+        // File exists but is corrupted, locked, or unreadable
+        if (!settingsErrorLogged) {
+            console.log(`[DeviceState] ⚠️ Could not read settings.json (${e.message}). Defaulting auto-resume to FALSE.`);
+            settingsErrorLogged = true; // Marks the error as logged
+        }
+    }
+    
+    return false; //default fallback value is false
+}
+
 
 function cleanContentItem(raw, playStatus) {
     if (!raw) return { source: "Ready" };
@@ -150,7 +179,7 @@ function resolveMetadataAndStatus(nativeData, massData, source, isPausedByShadow
 // --- HELPER: BEHAVIOR 4 (AUTO-RESUME PRESET) ---
 // =========================================================
 function handleWakeMemory(ip, isStandby, activePreset, finalPlayStatus) {
-    if (!AUTO_RESUME_PRESET) return; // Exit immediately if the user disabled this feature
+    if (!getAutoResumeSetting()) return; // Check settings.json
 
     // 1. RECORDING
     if (!isStandby) {

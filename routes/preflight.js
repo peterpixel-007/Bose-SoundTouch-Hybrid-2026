@@ -7,26 +7,26 @@ const net = require('net');
 // ⚠️ WARNING: SET THIS TO false BEFORE GITHUB RELEASE!
 const FORCE_TEST_JANITOR = false;
 
-
 async function auditSpeakerClock(ip, name) {
     try {
-        // 1. Calculate the exact local timezone offset right now
         const now = new Date();
-        const localUnixTime = Math.floor(now.getTime() / 1000);
-        const offsetMinutes = -now.getTimezoneOffset(); // e.g., +120 for ECST
+        const utcUnixTime = Math.floor(now.getTime() / 1000); 
+        const offsetMinutes = -now.getTimezoneOffset(); 
         const offsetSeconds = offsetMinutes * 60;
-        const utcUnixTime = localUnixTime - offsetSeconds;
+        const localUnixTime = utcUnixTime + offsetSeconds; 
 
-        // 2. Ask the speaker what offset it is currently using
         const checkRes = await axios.get(`http://${ip}:8090/clockTime`, { timeout: 1500 });
         const parser = new xml2js.Parser({ explicitArray: false });
         const data = await parser.parseStringPromise(checkRes.data);
         
-        const currentOffset = parseInt(data.clockTime?.offset || "0");
+        // Extract the attribute from the '$' object
+        const currentUtc = parseInt(data.clockTime?.$?.utcTime || "0");
+        const timeDrift = Math.abs(currentUtc - utcUnixTime);
 
-        // 3. Only push an update if the speaker is wrong
-        if (currentOffset !== offsetSeconds) {
-            console.log(`[Pre-Flight] 🕒 Adjusting timezone offset on ${name} (Daylight/Timezone shift detected)...`);
+        // Only push an update if the clock has drifted by > 120 seconds.
+        if (timeDrift > 120) {
+            console.log(`[Pre-Flight] 🕒 Adjusting clock on ${name} (Drift: ${timeDrift}s)...`);
+            
             const timeXml = `
                 <clockTime>
                     <state>SYNC_VALID</state>
@@ -35,13 +35,14 @@ async function auditSpeakerClock(ip, name) {
                     <offset>${offsetSeconds}</offset>
                 </clockTime>
             `.trim();
+            
             await axios.post(`http://${ip}:8090/clockTime`, timeXml, {
                 headers: { 'Content-Type': 'application/xml' },
                 timeout: 2000
             });
         }
     } catch (e) {
-        // Fail silently so it doesn't interrupt the boot sequence
+        console.error(`[Pre-Flight] ⚠️ Clock audit failed for ${name}: ${e.message}`);
     }
 }
 
@@ -183,19 +184,6 @@ function telnetJanitor(ip, targetIp = 'all') { // 🌟 ADDED targetIp HERE
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 // LEGACY USB WARNING BANNER
 function showLegacyUSBWarning(ip) {
     console.log(`\n=======================================================================`);
@@ -235,10 +223,15 @@ async function waitForJanitorReboot(ip) {
     return online;
 }
 
-async function runSetup(forceMode = false, targetIp = 'all') {
+/**
+ * CORE BOOTLOADER ENGINE: Evaluates fleet state, processes NVRAM injections, and executes targeted reboots.
+ * @param {string|null} forceInjectTarget - IP address of specific speaker to force-inject, or 'all'.
+ * @param {string|null} forceRebootTarget - IP address of specific speaker to soft-reboot, or 'all'.
+ */
+async function runSetup(forceInjectTarget = null, forceRebootTarget = null) {
     const configPath = path.join(__dirname, '..', 'config', 'speakers.json');
     if (!fs.existsSync(configPath)) {
-        console.error("[Pre-Flight] speakers.json not found!");
+        console.error("[Pre-Flight] ❌ speakers.json not found!");
         return { success: false, rebootedIps: [] };
     }
 
@@ -248,7 +241,7 @@ async function runSetup(forceMode = false, targetIp = 'all') {
     const parser = new xml2js.Parser({ explicitArray: false });
     const rebootedIps = [];
 
-    // Safely extract string data from xml2js objects
+    // Utility: Safely extract string data from xml2js parsed objects
     const extractString = (val) => {
         if (!val) return "";
         if (typeof val === 'string') return val;
@@ -257,104 +250,116 @@ async function runSetup(forceMode = false, targetIp = 'all') {
     };
 
     for (const speaker of SPEAKERS) {	
-        console.log(`[Pre-Flight] 🔍 Checking ${speaker.name} (${speaker.ip})...`);
+        console.log(`\n[Pre-Flight] 🔍 Auditing ${speaker.name} (${speaker.ip})...`);
         
         try {
-            // 1. RUN TELNET JANITOR FIRST
-			// 1. RUN TELNET JANITOR FIRST
-            const justCleaned = await telnetJanitor(speaker.ip, targetIp); // 🌟 JUST ADD targetIp HERE
-            //const justCleaned = await telnetJanitor(speaker.ip);
+            // ==========================================================
+            // PHASE 1: PRE-FLIGHT JANITOR (Clean old hijack files)
+            // ==========================================================
+            const justCleaned = await telnetJanitor(speaker.ip, forceInjectTarget); 
             if (justCleaned) {
-                // If it cleaned it, the speaker is rebooting. We must wait!
                 const isBack = await waitForJanitorReboot(speaker.ip);
                 if (!isBack) {
-                    console.log(`   └─ ⚠️ Timed out waiting for speaker. Moving on.`);
+                    console.log(`   └─ ⚠️ Timed out waiting for speaker to return. Moving to next speaker.`);
                     continue;
                 }
                 console.log(`   ├─ ✨ Speaker is clean. Proceeding with standard V3 Setup...`);
             }
 
-			const res = await axios.get(`http://${speaker.ip}:8090/info`, { timeout: 2000 });
+            // ==========================================================
+            // PHASE 2: STATE ACQUISITION & CLOCK AUDIT
+            // ==========================================================
+            const res = await axios.get(`http://${speaker.ip}:8090/info`, { timeout: 2000 });
             const data = await parser.parseStringPromise(res.data);
             const info = data.info || {};
             
-            // FIX 1: Extract from the deviceID attribute directly, fallback to a random 7-digit number
+            // Extract core device identifiers
             const fallbackId = Math.floor(Math.random() * 10000000).toString();
             const macAddress = extractString(info.$ && info.$.deviceID) || fallbackId;          
             const currentMargeUrl = extractString(info.margeURL || info.margeServerUrl);
             const currentMargeId = extractString(info.margeAccountUUID);
-			
-			// FIX 2: Invalid list forces reconfiguration (Checks BOTH IP and Port)
-            const isUrlConfigured = currentMargeUrl.includes(`${APP_IP}:${APP_PORT}`);
-            const hasMargeId = currentMargeId !== "" && currentMargeId !== "0000000" && currentMargeId !== "UNKNOWN_MAC";
-			
-			// ==========================================================
-            // --- SMART CLOCK AUDIT ---
-            // checks every speaker
-            // ==========================================================
+            
+            // Sync internal clock to prevent TLS/Cloud rejections
             await auditSpeakerClock(speaker.ip, speaker.name);
 
-            // --- FORCE INJECTION LOGIC ---
+            // ==========================================================
+            // PHASE 3: HIERARCHICAL EXECUTION LOGIC
+            // ==========================================================
+            // Condition Checks
+            const isUrlConfigured = currentMargeUrl.includes(`${APP_IP}:${APP_PORT}`);
+            const hasMargeId = currentMargeId !== "" && currentMargeId !== "0000000" && currentMargeId !== "UNKNOWN_MAC";
             const naturallyNeedsSetup = !isUrlConfigured || !hasMargeId;
-            const isForceTarget = forceMode && (targetIp === 'all' || targetIp === speaker.ip);
+            
+            const isInjectTarget = forceInjectTarget === 'all' || forceInjectTarget === speaker.ip;
+            const isRebootTarget = forceRebootTarget === 'all' || forceRebootTarget === speaker.ip;
 
-            // If healthy AND not forced, skip it safely.
-            if (!naturallyNeedsSetup && !isForceTarget) {
-                console.log(`[Pre-Flight] ✅ ${speaker.name} is already fully configured (MargeID: ${currentMargeId}).`);
+            // Decision Matrix
+            const needsInjection = naturallyNeedsSetup || isInjectTarget;
+            const needsReboot = needsInjection || isRebootTarget;
+
+            // Route A: Healthy & Ignored
+            if (!needsReboot) {
+                console.log(`   └─ ✅ Fully configured and healthy (MargeID: ${currentMargeId}).`);
                 continue; 
             }
 
-            // Otherwise, injecting. Explain exactly why:
-            if (naturallyNeedsSetup) {
-                console.log(`[Pre-Flight] ⚠️ ${speaker.name} requires setup.`);
-                if (!hasMargeId) console.log(`   ├─ Reason: Missing or invalid MargeID.`);
-                if (!isUrlConfigured) console.log(`   ├─ Reason: Cloud URL mismatch (Found: "${currentMargeUrl}").`);
-            } else if (isForceTarget) {
-                console.log(`[Pre-Flight] 🚨 FORCE MODE ENABLED: Bypassing checks. Hybrid Setup Injecting ${speaker.name}...`);
+            // Route B: Requires NVRAM Injection (Implicitly includes a hardware reboot)
+            if (needsInjection) {
+                if (naturallyNeedsSetup) {
+                    console.log(`   ├─ ⚠️ Action Required: Native setup missing or corrupted.`);
+                    if (!hasMargeId) console.log(`   │  └─ Reason: Missing or invalid MargeID.`);
+                    if (!isUrlConfigured) console.log(`   │  └─ Reason: Cloud URL mismatch (Found: "${currentMargeUrl}").`);
+                } else if (isInjectTarget) {
+                    console.log(`   ├─ 🚨 FORCE INJECTION ENABLED: Bypassing health checks.`);
+                }
+
+                console.log(`   ├─ ⚙️ Initiating NVRAM Injection sequence via Port 17000...`);
+                const targetMargeId = hasMargeId ? currentMargeId : macAddress;
+                console.log(`   ├─ 🎯 Target MargeID: ${targetMargeId}`);
+                
+                // Build the execution stack
+                const commandList = [
+                    `sys configuration bmxRegistryUrl http://${APP_IP}:${APP_PORT}/bmx/registry/v1/services`,
+                    `sys configuration statsServerUrl http://${APP_IP}:${APP_PORT}`,
+                    `sys configuration margeServerUrl http://${APP_IP}:${APP_PORT}/marge`,
+                    `sys configuration swUpdateUrl http://${APP_IP}:${APP_PORT}/updates/soundtouch`,
+                    `envswitch boseurls set http://${APP_IP}:${APP_PORT} http://${APP_IP}:${APP_PORT}/updates/soundtouch`,
+                    `sys remote_service on`,
+                    `getpdo CurrentSystemConfiguration`
+                ];
+                
+                if (!hasMargeId || isInjectTarget) {
+                    commandList.push(`envswitch AccountId set ${targetMargeId}`);
+                }
+
+                console.log(`   ├─ ✍️  Writing configurations sequentially...`);
+                const injectionSuccess = await injectPort17000Commands(speaker.ip, commandList);
+
+                if (!injectionSuccess) {
+                    console.log(`   └─ ❌ Injection failed due to socket error. Aborting setup.`);
+                    continue; 
+                }
+
+                console.log(`   ├─ ⏳ Waiting 10 seconds for NVRAM to safely write to flash memory...`);
+                await new Promise(resolve => setTimeout(resolve, 10000));
+
+                console.log(`   └─ 🧠 Save complete. Hard-rebooting ${speaker.name}...`);
+                await injectPort17000Commands(speaker.ip, [`sys reboot`]);
+                rebootedIps.push(speaker.ip);
+            
+            // Route C: Requires ONLY a Soft-Reboot (Skipped if Route B executed)
+            } else if (isRebootTarget) {
+                console.log(`   └─ 🔄 FORCE REBOOT SEQUENCE: Soft-rebooting ${speaker.name}...`);
+                await injectPort17000Commands(speaker.ip, [`sys reboot`]);
+                rebootedIps.push(speaker.ip);
             }
-            // --- END FORCE INJECTION LOGIC ---
 
-			console.log(`   ├─ Initiating NVRAM Injection sequence via Port 17000...`);
-
-            const targetMargeId = hasMargeId ? currentMargeId : macAddress;
-			// log too display MargeId
-            console.log(`   ├─ 🎯 Target MargeID: ${targetMargeId}`);
-            const commandList = [];
-			
-			// Stack URLs first so they don't get blocked by EPIPE
-            commandList.push(`sys configuration bmxRegistryUrl http://${APP_IP}:${APP_PORT}/bmx/registry/v1/services`);
-            commandList.push(`sys configuration statsServerUrl http://${APP_IP}:${APP_PORT}`);
-            commandList.push(`sys configuration margeServerUrl http://${APP_IP}:${APP_PORT}/marge`);
-            commandList.push(`sys configuration swUpdateUrl http://${APP_IP}:${APP_PORT}/updates/soundtouch`);
-            commandList.push(`envswitch boseurls set http://${APP_IP}:${APP_PORT} http://${APP_IP}:${APP_PORT}/updates/soundtouch`);
-            commandList.push(`sys remote_service on`);		
-			// ADD COMMAND TO MATCH ISSUE 20 WORKAROUND - Force processor to pause and read its own config
-            commandList.push(`getpdo CurrentSystemConfiguration`)
-            // Push AccountId LAST like Issue 20 WorkAround
-			if (!hasMargeId || isForceTarget) {
-                commandList.push(`envswitch AccountId set ${targetMargeId}`);
-            }
-
-            console.log(`   ├─ ✍️  Writing configurations sequentially (this takes a few seconds)...`);
-            const injectionSuccess = await injectPort17000Commands(speaker.ip, commandList);
-
-            // Trap EPIPE failure and abort reboot
-            if (!injectionSuccess) {
-                console.log(`   └─ ❌ Injection failed due to socket error. Aborting setup for ${speaker.name}.`);
-                continue; 
-            }
-
-            console.log(`   ├─ ⏳ Waiting 10 seconds for NVRAM to safely write to flash memory...`);
-            await new Promise(resolve => setTimeout(resolve, 10000));
-
-            console.log(`   └─ 🧠 Save complete. Rebooting ${speaker.name}...`);
-            await injectPort17000Commands(speaker.ip, [`sys reboot`]);
-            rebootedIps.push(speaker.ip);
         } catch (err) {
-            console.log(`[Pre-Flight] ❌ Could not reach ${speaker.ip}: ${err.message}`);
+            console.log(`[Pre-Flight] ❌ Critical failure reaching ${speaker.ip}: ${err.message}`);
         }
     }
+    
     return { success: true, rebootedIps };
 }
 
-module.exports = { runSetup };
+module.exports = { runSetup, injectPort17000Commands };

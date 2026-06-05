@@ -1,9 +1,9 @@
 // ============================================================================
 // PHASE 1: IMPORTS & CONSTANTS
 // ============================================================================
-const CURRENT_VERSION = "v3.4.3";
+const CURRENT_VERSION = "v3.4.4";
+const ENV_SCHEMA_VERSION = "v3.4.4"; 
 let UPDATE_CACHED_DATA = { updateAvailable: false, current: CURRENT_VERSION };
-
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -23,6 +23,7 @@ if (!fs.existsSync(USER_ROOT)) {
     console.log(`[Boot] Creating missing config directory at ${USER_ROOT}`);
     fs.mkdirSync(USER_ROOT, { recursive: true });
 }
+
 
 const LOG_DIR = path.join(USER_ROOT, 'logs');
 if (!fs.existsSync(LOG_DIR)) {
@@ -63,27 +64,26 @@ const libraryTemplatePath = path.join(APP_ROOT, 'templates', 'library.template.j
 
 let isReady = true; 
 
-// Handle .env and v3.4 Migration
+// Handle .env and Migration
 if (fs.existsSync(envPath)) {
     const envContent = fs.readFileSync(envPath, 'utf8');
     const firstLine = envContent.split('\n')[0].trim();
     
-    if (firstLine !== '# .env file format: v3.4') {
+if (firstLine !== `# .env file format: ${ENV_SCHEMA_VERSION}`) {
         console.log(`[Boot] Outdated .env format detected. Backing up to .env.bak...`);
         fs.renameSync(envPath, path.join(USER_ROOT, '.env.bak'));
         
-        console.log(`[Boot] Copying new v3.4 .env.template...`);
+        console.log(`[Boot] Copying new ${ENV_SCHEMA_VERSION} .env.template...`);
         if (fs.existsSync(envTemplatePath)) {
             fs.copyFileSync(envTemplatePath, envPath);
         } else {
             console.error(`[Boot] CRITICAL: .env.template is missing from ${envTemplatePath}`);
         }
         
-        // REPLACED THE DOUBLE BANNER WITH A CLEAN SINGLE-LINE WARNING
-        console.log(`[!!] Validation Failed: .env file updated to v3.4. Old settings saved to config/.env.bak`);
+        console.log(`[!!] Validation Failed: .env file updated to ${ENV_SCHEMA_VERSION}  Old settings saved to config/.env.bak`);
         isReady = false; 
     } else {
-        console.log(`[Boot] .env (v3.4) already exists. Skipping generation.`);
+        console.log(`[Boot] .env ${ENV_SCHEMA_VERSION} already exists. Skipping generation.`);
     }
 } else {
     console.log(`[Boot] .env not found. Copying template...`);
@@ -120,6 +120,27 @@ if (!fs.existsSync(libraryPath)) {
     }
 } else {
     console.log(`[Boot] library.json already exists. Skipping generation.`);
+}
+
+// ---------------------------------------------------------
+// ⚙️ AUTO-GENERATE DEFAULT SETTINGS
+// ---------------------------------------------------------
+const settingsPath = path.join(USER_ROOT, 'settings.json');
+if (!fs.existsSync(settingsPath)) {
+    console.log(`[Boot] settings.json not found. Generating default preferences...`);
+    const defaultSettings = {
+        autoResumePreset: false,
+        autoRestartMass: false,
+        autoSyncVolume: false,
+        mobileAutoSortSpeakers: true,  
+        scheduledSpeakerAudit: true,   
+        scheduledRestart: false,
+        includeReboot: false,
+        searchMenuOrder: ['global', 'radio', 'nas', 'spotify']
+    };
+    fs.writeFileSync(settingsPath, JSON.stringify(defaultSettings, null, 4));
+} else {
+    console.log(`[Boot] settings.json already exists. Skipping generation.`);
 }
 
 // ============================================================================
@@ -170,22 +191,21 @@ if (!isReady) {
     setInterval(() => {}, 1000 * 60 * 60); 
 } else {
 
-    // ============================================================================
-    // PHASE 5: ENVIRONMENT INITIALIZATION
-    // ============================================================================
+// ============================================================================
+// PHASE 5: ENVIRONMENT INITIALIZATION
+// ============================================================================
     const deviceState = require('./device_state');
     const { dockerAction, getMassHealth } = require('./routes/mass_utils');
     const preflight = require('./routes/preflight');
 
-    try {
-        if (fs.existsSync('/etc/timezone')) {
-            process.env.TZ = fs.readFileSync('/etc/timezone', 'utf8').trim();
-        } else {
-            process.env.TZ = 'UTC';
-        }
-    } catch (err) {
-        console.warn("[Boot] Could not read timezone, defaulting to UTC.");
+    // Smart Timezone Detection & Logging
+    if (process.env.TZ) {
+        // Docker passed it successfully from the .yml file
+        console.log(`[Boot] 🕒 Timezone loaded from Docker config: ${process.env.TZ}`);
+    } else {
+        // User forgot to set it in the .yml file
         process.env.TZ = 'UTC';
+        console.log(`[Boot] ⚠️ No Timezone found in Docker .yml. Defaulting to UTC.`);
     }
 
     const SPEAKERS = require(speakersPath);
@@ -207,7 +227,7 @@ if (!isReady) {
 
     app.use('/api', require('./routes/controller'));
     app.use('/api', require('./routes/manager'));
-    app.use('/api', require('./routes/admin'));
+	app.use('/api', require('./routes/admin').router); // Fix: Extracted .router
     app.use('/api/admin', require('./routes/mass_utils').router);
 
     app.use('/', require('./routes/bridge')); 
@@ -257,35 +277,41 @@ if (!isReady) {
         }
         console.log("=========================================================================");
 
-        // STEP 2: Force Injection Check & Pre-Flight Execution
+		// STEP 2: Force Injection Check & Pre-Flight Execution
         console.log(`\n-----------------------------------------------------------------------`);
         console.log(`[Boot] Handing over to Pre-Flight Speaker Configuration...`); 
         console.log(`-------------------------------------------------------------------------`);       		
         
-        let forceMode = false;
-        let targetIp = 'all';
+        let forceInjectTarget = null;
+        let forceRebootTarget = null;
         const flagPath = path.join(USER_ROOT, 'force_inject.json');
-
         if (fs.existsSync(flagPath)) {
             try {
                 const flagData = JSON.parse(fs.readFileSync(flagPath, 'utf8'));
-                forceMode = flagData.forceMode || false;
-                targetIp = flagData.targetIp || 'all';
+                // Read the new variables safely from the JSON payload
+                forceInjectTarget = flagData.forceInjectTarget || null;
+                forceRebootTarget = flagData.forceRebootTarget || null;
                 if (flagData.debugMode === true) {
                     global.DEBUG_MODE = true;
-                    console.log(`[Boot] 🐛 Verbose Debug Mode RESTORED from Force Inject flag.`);
+                    console.log(`[Boot] 🐛 Verbose Debug Mode RESTORED from Force flag.`);
                 }
-                console.log(`[Boot] 🚨 FORCE INJECTION FLAG DETECTED! Target: ${targetIp}`);
+                if (forceInjectTarget || forceRebootTarget) {
+                    console.log(`[Boot] 🚨 FORCE SEQUENCE FLAG DETECTED!`);
+                    if (forceInjectTarget) console.log(`   ├─ Inject Target: ${forceInjectTarget}`);
+                    if (forceRebootTarget) console.log(`   ├─ Reboot Target: ${forceRebootTarget}`);
+                }                
+                // Delete the file so it only executes once!
                 fs.unlinkSync(flagPath);
             } catch (e) {
                 console.error("[Boot] ⚠️ Error reading force_inject.json flag file.", e);
             }
         }
-
-        const preflightData = await preflight.runSetup(forceMode, targetIp);
+        // Pass the new variables to the updated engine
+        const preflightData = await preflight.runSetup(forceInjectTarget, forceRebootTarget);
         if (!preflightData.success) console.log(`[Boot] ⚠️ Pre-Flight encountered a soft error. Continuing boot...\n`);
         
-        // STEP 3: The Great Wait (Reboot Polling)
+
+// STEP 3: The Great Wait (Reboot Polling)
         if (preflightData.rebootedIps && preflightData.rebootedIps.length > 0) {
             console.log(`\n=======================================================================`);
             console.log(`⏳ SPEAKER REBOOT SEQUENCE INITIATED`);
@@ -407,12 +433,36 @@ if (!isReady) {
         await checkGitHubForUpdates();
 
         // STEP 8: The Final Banner
+		// 🌟 Cache globally so the frontend UI can fetch them instantly
+        global.APP_VERSION = CURRENT_VERSION;
+        global.MASS_VERSION = massHealth.version;
         console.log("=========================================================================");
         console.log(`====      BOSE SOUNDTOUCH HYBRID 2026:  ${CURRENT_VERSION.toUpperCase()}`);
         console.log(`====                  MUSIC ASSISTANT:  v${massHealth.version}`);
         console.log("=======================================================================\n");
         console.log(`➡️  Web UI accessible at: http://${process.env.APP_IP}:${PORT}/control.html\n`);
-    }
+		
+		// =======================================================================
+        // STEP 9: THE NETWORK KEEP-ALIVE HEARTBEAT
+        // =======================================================================
+        // Runs every 45 minutes to prevent network routers from killing idle DLNA/AirPlay sockets overnight.
+        setInterval(async () => {
+            console.log(`\n[Boot] 💓 Executing scheduled Network Keep-Alive ping to Music Assistant...`);
+            try {
+                const massCore = require('./routes/mass');
+                
+                // Runs the Soft Rescan (players/all) silently in the background
+                // Passing the combined string ensures the backend logs perfectly match the UI
+                await massCore.forceRescan(false, 'dlna & airplay'); 
+                
+            } catch (e) {
+                // Silently catch network drops so the Docker container doesn't crash if MA is temporarily offline
+                console.error(`[Boot] ⚠️ Keep-Alive heartbeat failed to reach MASS: ${e.message}`);
+            }
+        }, 45 * 60 * 1000); // 45 minutes in milliseconds
+	}	
 
+	const { startScheduler } = require('./routes/utils');
+	startScheduler();
     app.listen(PORT, '0.0.0.0', systemBoot);
-} // <--- This closes the Gatekeeper "else" block!
+} // <--- closes the Gatekeeper "else" block
