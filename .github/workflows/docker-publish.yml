@@ -36,7 +36,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/pixelpeter-007/bose-soundtouch-hybrid-2026
+          images: ghcr.io/peterpixel-007/bose-soundtouch-hybrid-2026
           tags: |
             type=edge,branch=main
             type=match,pattern=(v.*),group=1
