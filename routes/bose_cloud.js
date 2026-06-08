@@ -335,7 +335,7 @@ router.get(/^\/updates.*/, (req, res) =>
 	    const reqIp = getIp(req);
 	    console.log(`[Bose Cloud] updates requested by ${reqIp}.`);
 		res.status(404).send("Not Found");
-	}
+	});
 
 // Standard Express 5 Parameter Routes
 router.delete('/streaming/account/:id/device/:deviceId', (req, res) => res.send('<?xml version="1.0" encoding="UTF-8" ?><status>success</status>'));
@@ -346,14 +346,14 @@ router.get('/streaming/software/update/account/:id', (req, res) =>
 	    const reqIp = getIp(req);
 	    console.log(`[Bose Cloud] update account requested by ${reqIp}.`);
 		res.send('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><software_update><softwareUpdateLocation></softwareUpdateLocation></software_update>');
-	}
+	});
 router.get('/streaming/account/:id/provider_settings', (req, res) => res.send('<?xml version="1.0" encoding="UTF-8" ?><providerSettings><status>success</status></providerSettings>'));
 router.get('/streaming/device/:id/streaming_token', (req, res) => 
 	{
 	    const reqIp = getIp(req);
 	    console.log(`[Bose Cloud] streaming token requested by ${reqIp}.`);
 		res.status(404).send('Not Found');
-	}
+	});
 router.use('/radio', (req, res) => res.status(200).send("OK"));
 
 module.exports = router;
