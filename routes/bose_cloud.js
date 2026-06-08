@@ -6,6 +6,14 @@ const path = require('path');
 const axios = require('axios');
 const xml2js = require('xml2js');
 
+// ============================================================================
+// ULTRA LOW-LEVEL REQUEST LOGGING - Catch ALL events
+// ============================================================================
+router.use((req, res, next) => {
+    console.log(`[INCOMING EVENT] ${new Date().toISOString()} | ${req.method} ${req.originalUrl} | IP: ${req.ip}`);
+    next();
+});
+
 const IP = process.env.APP_IP;
 const PORT = process.env.APP_PORT;
 const LOG_DIR = path.resolve(process.cwd(), "config", "logs");
@@ -186,13 +194,6 @@ function generateAccountXml(reqIp, accountId, deviceId, serialNumber, deviceName
 // MIDDLEWARE & ROUTING
 // ============================================================================
 router.use((req, res, next) => {
-    const reqIp = getIp(req);
-    const timestamp = getTimestamp();
-    
-    if (isDebug()) {
-        console.log(`[Bose Cloud EVT] ${req.method} ${req.url} from ${reqIp}`);
-    }
-    
     // Existing middleware logic
     if (req.url.includes('/streaming') || req.url === '/') {
         res.set('Content-Type', 'application/vnd.bose.streaming-v1.2+xml');
