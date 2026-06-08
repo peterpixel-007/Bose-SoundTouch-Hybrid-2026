@@ -20,6 +20,66 @@ function getTimestamp() {
     return new Date().toISOString();
 }
 
+// ============================================================================
+// LOW-LEVEL COMPREHENSIVE REQUEST LOGGER (captures ALL events)
+// ============================================================================
+const ALL_REQUESTS_LOG = path.join(LOG_DIR, 'all_requests.jsonl');
+
+function logAllRequests(req, res, next) {
+    const reqIp = getIp(req);
+    const chunks = [];
+    
+    // Capture response body
+    const originalWrite = res.write;
+    const originalSend = res.send;
+    
+    res.write = function(chunk, encoding) {
+        if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        return originalWrite.apply(res, arguments);
+    };
+    
+    res.send = function(data) {
+        if (data) chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+        return originalSend.apply(res, arguments);
+    };
+    
+    // Log after response is finished
+    res.on('finish', () => {
+        try {
+            const responseBody = Buffer.concat(chunks).toString('utf8');
+            
+            const logEntry = {
+                timestamp: getTimestamp(),
+                method: req.method,
+                url: req.url,
+                path: req.path,
+                ip: reqIp,
+                headers: {
+                    'content-type': req.get('content-type') || 'none',
+                    'user-agent': req.get('user-agent') || 'none',
+                    'content-length': req.get('content-length') || 'none',
+                },
+                query: Object.keys(req.query).length > 0 ? req.query : null,
+                statusCode: res.statusCode,
+                requestBody: req.body || req.rawBody || null,
+                responseBodyPreview: responseBody.substring(0, 300) // First 300 chars
+            };
+            
+            // Append to JSONL file (one JSON per line for easy parsing)
+            fs.appendFileSync(ALL_REQUESTS_LOG, JSON.stringify(logEntry) + '\n');
+            
+            // Console log summary (debug mode only)
+            if (isDebug()) {
+                console.log(`[Bose RAW] ${req.method.padEnd(6)} ${req.url.substring(0, 50).padEnd(50)} from ${reqIp} → ${res.statusCode}`);
+            }
+        } catch (e) {
+            console.error(`[Bose Cloud] Logging error: ${e.message}`);
+        }
+    });
+    
+    next();
+}
+
 // Helper to wrap responses in standard Bose SOAP envelope
 const sendBoseEnvelope = (res, bodyContent) => {
     const envelope = `<?xml version="1.0" encoding="UTF-8"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body>${bodyContent}</SOAP-ENV:Body></SOAP-ENV:Envelope>`;
@@ -185,9 +245,43 @@ function generateAccountXml(reqIp, accountId, deviceId, serialNumber, deviceName
 // ============================================================================
 // MIDDLEWARE & ROUTING
 // ============================================================================
+const getIp = (req) => (req.ip || req.connection.remoteAddress || '').replace('::ffff:', '');
+
+// ATTACH THE LOGGER TO ALL ROUTES (must be first middleware)
+router.use(logAllRequests);
+
+// Capture raw body before parsing
+router.use((req, res, next) => {
+    let rawData = '';
+    
+    req.on('data', chunk => {
+        rawData += chunk.toString();
+    });
+    
+    req.on('end', () => {
+        req.rawBody = rawData;
+        
+        // Try to parse based on content-type
+        const contentType = req.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            try {
+                req.body = JSON.parse(rawData);
+            } catch (e) {
+                req.body = null;
+            }
+        } else if (contentType && contentType.includes('application/xml')) {
+            req.body = rawData;
+        } else {
+            req.body = rawData || null;
+        }
+        
+        next();
+    });
+});
+
+// Original middleware
 router.use((req, res, next) => {
     const reqIp = getIp(req);
-    const timestamp = getTimestamp();
     
     if (isDebug()) {
         console.log(`[Bose Cloud EVT] ${req.method} ${req.url} from ${reqIp}`);
@@ -200,8 +294,6 @@ router.use((req, res, next) => {
     res.set('Etag', Date.now().toString());
     next();
 });
-
-const getIp = (req) => (req.ip || req.connection.remoteAddress || '').replace('::ffff:', '');
 
 router.get('/', (req, res) => {
     res.send('<?xml version="1.0" encoding="UTF-8" ?><marge><status>success</status></marge>');
