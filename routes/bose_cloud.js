@@ -186,6 +186,14 @@ function generateAccountXml(reqIp, accountId, deviceId, serialNumber, deviceName
 // MIDDLEWARE & ROUTING
 // ============================================================================
 router.use((req, res, next) => {
+    const reqIp = getIp(req);
+    const timestamp = getTimestamp();
+    
+    if (isDebug()) {
+        console.log(`[Bose Cloud EVT] ${req.method} ${req.url} from ${reqIp}`);
+    }
+    
+    // Existing middleware logic
     if (req.url.includes('/streaming') || req.url === '/') {
         res.set('Content-Type', 'application/vnd.bose.streaming-v1.2+xml');
     }
