@@ -69,9 +69,7 @@ function logAllRequests(req, res, next) {
             fs.appendFileSync(ALL_REQUESTS_LOG, JSON.stringify(logEntry) + '\n');
             
             // Console log summary (debug mode only)
-            if (isDebug()) {
-                console.log(`[Bose RAW] ${req.method.padEnd(6)} ${req.url.substring(0, 50).padEnd(50)} from ${reqIp} → ${res.statusCode}`);
-            }
+            console.log(`[Bose RAW] ${req.method.padEnd(6)} ${req.url.substring(0, 50).padEnd(50)} from ${reqIp} → ${res.statusCode}`);
         } catch (e) {
             console.error(`[Bose Cloud] Logging error: ${e.message}`);
         }
