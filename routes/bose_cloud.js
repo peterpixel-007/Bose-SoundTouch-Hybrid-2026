@@ -66,7 +66,7 @@ function logAllRequests(req, res, next) {
             };
             
             // Append to JSONL file (one JSON per line for easy parsing)
-            fs.appendFileSync(ALL_REQUESTS_LOG, JSON.stringify(logEntry) + '\n');
+            // fs.appendFileSync(ALL_REQUESTS_LOG, JSON.stringify(logEntry) + '\n');
             
             // Console log summary (debug mode only)
             console.log(`[Bose RAW] ${req.method.padEnd(6)} ${req.url.substring(0, 50).padEnd(50)} from ${reqIp} → ${res.statusCode}`);
