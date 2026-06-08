@@ -322,15 +322,30 @@ router.get('/streaming/account/:id/device/:deviceId/group/', async (req, res) =>
 // Express 5 Native RegExp Catch-Alls (No quotes!)
 router.post(/^\/events.*/, (req, res) => res.status(200).send("OK"));
 router.post(/^\/v1\/scmudc.*/, (req, res) => res.status(200).send());
-router.get(/^\/updates.*/, (req, res) => res.status(404).send("Not Found"));
+router.get(/^\/updates.*/, (req, res) => 
+	{
+	    const reqIp = getIp(req);
+	    console.log(`[Bose Cloud] updates requested by ${reqIp}.`);
+		res.status(404).send("Not Found"));
+	}
 
 // Standard Express 5 Parameter Routes
 router.delete('/streaming/account/:id/device/:deviceId', (req, res) => res.send('<?xml version="1.0" encoding="UTF-8" ?><status>success</status>'));
 router.post(['/streaming/account/:id/device', '/streaming/account/:id/device/'], (req, res) => res.status(201).send('<?xml version="1.0" encoding="UTF-8" ?><status>success</status>'));
 router.put('/streaming/account/:id/device/:deviceId', (req, res) => res.send('<?xml version="1.0" encoding="UTF-8" ?><status>success</status>'));
-router.get('/streaming/software/update/account/:id', (req, res) => res.send('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><software_update><softwareUpdateLocation></softwareUpdateLocation></software_update>'));
+router.get('/streaming/software/update/account/:id', (req, res) => 
+	{
+	    const reqIp = getIp(req);
+	    console.log(`[Bose Cloud] update account requested by ${reqIp}.`);
+		res.send('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><software_update><softwareUpdateLocation></softwareUpdateLocation></software_update>'));
+	}
 router.get('/streaming/account/:id/provider_settings', (req, res) => res.send('<?xml version="1.0" encoding="UTF-8" ?><providerSettings><status>success</status></providerSettings>'));
-router.get('/streaming/device/:id/streaming_token', (req, res) => res.status(404).send('Not Found'));
+router.get('/streaming/device/:id/streaming_token', (req, res) => 
+	{
+	    const reqIp = getIp(req);
+	    console.log(`[Bose Cloud] streaming token requested by ${reqIp}.`);
+		res.status(404).send('Not Found'));
+	}
 router.use('/radio', (req, res) => res.status(200).send("OK"));
 
 module.exports = router;
