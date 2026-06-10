@@ -284,14 +284,13 @@ router.post('/volume', async(req, res) => {
 
 router.post('/balance', async(req, res) => {
     const { ip, value } = req.body;
-    
-    // 🌟 1. This prints to your Live Server Logs on the Tools page
     console.log(`[Control] ⚖️ L/R Balance adjusted for ${ip} to value: ${value}`);
     
     try {
-        // 🌟 2. This fires the actual XML payload directly to the Bose hardware
-        await sendBoseXml(ip, 'balance', `<balance>${value}</balance>`);
+        // The exact nested XML structure Bose expects for DSP targets
+        const xmlPayload = `<balance><targetbalance>${value}</targetbalance></balance>`;
         
+        await sendBoseXml(ip, 'balance', xmlPayload);
         res.send({ success: true });
     } catch (e) {
         console.error(`[Control] ❌ Failed to set balance on ${ip}: ${e.message}`);
