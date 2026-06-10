@@ -91,7 +91,7 @@
 									<input type="checkbox" id="pref_includeReboot" class="pref-checkbox" disabled> Include All Speaker Reboots
 								</label>						
 							</div>
-							<label class="pref-label"><input type="checkbox" id="pref_bypassCloudEmulation" class="pref-checkbox"> Bypass Cloud Simulation Beta: (works so far... Needs no speaker config/inject/handskake!)</label>
+							<label class="pref-label"><input type="checkbox" id="pref_bypassCloudEmulation" class="pref-checkbox"> Bypass Cloud Simulation Beta</label>
 						</div>
 						<button class="btn" style="background: var(--accent); color: #000; font-weight: bold; width: 100%; margin-top: 15px; border: none;" onclick="savePreferences()">💾 Save Automation Rules</button>
 					</div>
@@ -209,7 +209,7 @@
 				
 			<div class="card" style="margin-bottom: 25px; border-left: 3px solid #f39c12; height:auto;">
 				<div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;" onclick="const el = document.getElementById('stereoPairingCollapse'); el.style.display = el.style.display === 'none' ? 'block' : 'none';">
-					<h3 style="margin:0;">🎧 ST10 Stereo Pairing (Beta: Need Testers I only have 1 ST10 so need testers to provide feedback on what works/broken/behaviors/downstream impacts et)</h3>
+					<h3 style="margin:0;">🎧 ST10 Stereo Pairing</h3>
 					<span id="stereoPairCount" style="background: var(--input-bg); padding: 4px 8px; border-radius: 4px; font-family: monospace; font-size: 0.9em; border: 1px solid var(--border);">0 Pairs</span>
 				</div>
 				<div class="sub-head" style="margin-top: 5px; margin-bottom: 0;">Bond two SoundTouch 10s into a persistent Left/Right stereo pair.</div>
@@ -248,13 +248,7 @@
 					</div>
 				</div>
 			</div>
-			
-
-
-
-        <div class="card shadow-sm mb-4">
-			
-			
+	
 			<div class="card" style="margin-bottom: 25px; border-left: 3px solid #1abc9c; height:auto;">
 				<div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;" onclick="toggleWifiWindow()">
 					<h3 style="margin:0;">📶 Wi-Fi Provisioning</h3>
@@ -287,9 +281,7 @@
 					</div>
 				</div>
 			</div>
-			
-			
-		</div>
+
 	</div>
 </div>	
 	<div id="doc-modal" class="modal">
@@ -1042,18 +1034,6 @@
 		    st10Speakers.push({
 		        ip: "10.0.0.91",
 		        name: "Dummy ST10 (Alpha)",
-		        type: "SoundTouch 10"
-		    }, {
-		        ip: "10.0.0.92",
-		        name: "Dummy ST10 (Bravo)",
-		        type: "SoundTouch 10"
-		    }, {
-		        ip: "10.0.0.93",
-		        name: "Dummy ST10 (Charlie)",
-		        type: "SoundTouch 10"
-		    }, {
-		        ip: "10.0.0.94",
-		        name: "Dummy ST10 (Delta)",
 		        type: "SoundTouch 10"
 		    });
 

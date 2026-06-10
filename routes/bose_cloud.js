@@ -279,7 +279,8 @@ router.get('/streaming/account/:id/device/:deviceId/presets', (req, res) => {
 const stereoPairsFile = path.join(process.cwd(), 'config', 'stereo_pairs.json');
 
 router.get('/streaming/account/:id/device/:deviceId/group/', async (req, res) => {
-    const reqIp = getIp(req);
+    //const reqIp = getIp(req);
+	const reqIp = req.query.ip || getIp(req); //TESTING ONLY REMOVE BEFORE PROD
 
     if (fs.existsSync(stereoPairsFile)) {
         const pairs = JSON.parse(fs.readFileSync(stereoPairsFile, 'utf8'));
