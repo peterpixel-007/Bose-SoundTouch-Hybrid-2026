@@ -380,6 +380,7 @@ async function initDevice(device) {
             try {
                 let rawXml = data.toString('utf8');
                 rawXml = rawXml.replace(/\ufffd/g, 'a').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+                if (global.DEBUG_MODE) console.log(`[DeviceState] \ud83d\udd0d WS Raw [${device.ip}]: ${rawXml}`);
                 const parser = new xml2js.Parser({ explicitArray: false });
                 const result = await parser.parseStringPromise(rawXml);
 

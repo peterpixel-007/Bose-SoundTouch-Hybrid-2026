@@ -68,8 +68,9 @@ function scrubText(str) {
 
 let lastAuditDate = null;
 let lastRestartDate = null;
-let lastWatchdogRunMs = null; // set when startScheduler() actually starts the clock
-let lastObserveRunMs = null;  // separate 5-min clock for observe mode
+let lastWatchdogRunMs = null;      // set when startScheduler() actually starts the clock
+let lastObserveRunMs = null;       // separate 5-min clock for observe mode
+let lastObserveHourlyLogMs = null; // hourly "still watching" heartbeat for observe mode
 const firedToday = new Set();
 
 // --- SHARED HYBRID PRESET DEFINITIONS ---
@@ -117,6 +118,7 @@ async function pushPresetsToSpeaker(ip) {
             console.error(`[Preset Watchdog] ❌ Failed to push Preset ${preset.id} to ${ip}: ${e.message}`);
         }
     }
+    console.log(`[Preset Watchdog] ✅ All 6 presets pushed to ${ip}.`);
 }
 
 // --- WATCHDOG OBSERVE: 12-HOUR ROLLING LOG ---
@@ -167,7 +169,9 @@ async function queryPresetsForSpeaker(ip) {
     }
 
     appendWatchdogLog(ip, entry);
-    console.log(`[Watchdog] 📋 Preset snapshot for ${ip}: ${entry.presets.length} preset(s)${entry.error ? ' — ERROR: ' + entry.error : ''}`);
+    if (global.DEBUG_MODE) {
+        console.log(`[Watchdog] 📋 Preset snapshot for ${ip}: ${entry.presets.length} preset(s)${entry.error ? ' — ERROR: ' + entry.error : ''}`);
+    }
 }
 
 // --- WATCHDOG: SYNC GLOBALS FROM SETTINGS ---
@@ -270,8 +274,9 @@ function startScheduler() {
     // already reboots/heals speakers as needed on startup, so re-running this within the
     // first minute of every restart would be redundant. The clock starts only once the
     // app is actually up and the scheduler is live.
-    lastWatchdogRunMs = Date.now();
-    lastObserveRunMs  = Date.now();
+    lastWatchdogRunMs      = Date.now();
+    lastObserveRunMs       = Date.now();
+    lastObserveHourlyLogMs = Date.now();
 
     // Prime globals so bose_cloud.js middleware has them from the first request.
     updateWatchdogGlobals();
@@ -330,9 +335,17 @@ function startScheduler() {
                     }
                 }
             } else if (watchdogMode === 'observe') {
+                // Hourly heartbeat — always visible so you know observe mode is alive
+                if (Date.now() - lastObserveHourlyLogMs >= 60 * 60000) {
+                    lastObserveHourlyLogMs = Date.now();
+                    console.log(`[Watchdog] 👁️  Observe mode active: monitoring ${watchdogSpeakers.length} speaker(s). Querying every 5 min, logging to watchdog_*.json.`);
+                }
+                // Per-query detail — debug only (fires every 5 min)
                 if (Date.now() - lastObserveRunMs >= 5 * 60000) {
                     lastObserveRunMs = Date.now();
-                    console.log(`\n[Scheduler] 🔍 Preset Watchdog (Observe): querying ${watchdogSpeakers.length} speaker(s)...`);
+                    if (global.DEBUG_MODE) {
+                        console.log(`\n[Scheduler] 🔍 Preset Watchdog (Observe): querying ${watchdogSpeakers.length} speaker(s)...`);
+                    }
                     for (const ip of watchdogSpeakers) {
                         await queryPresetsForSpeaker(ip);
                     }

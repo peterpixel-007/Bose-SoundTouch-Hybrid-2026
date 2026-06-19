@@ -12,6 +12,10 @@ const PORT = process.env.APP_PORT;
 const LOG_DIR = path.resolve(process.cwd(), "config", "logs");
 const identityCache = {};
 
+// ⚠️ TEST FLAG — SET TO true TO DELIVER EMPTY PRESETS DURING CLOUD HANDSHAKE.
+// SET BACK TO false BEFORE COMMITTING.
+const FORCE_EMPTY_PRESETS = false;
+
 // Use the global debug variable set by tools.html / admin.js
 const isDebug = () => global.DEBUG_MODE === true;
 
@@ -136,10 +140,10 @@ function generateSourceProviders(reqIp) {
 // a response it didn't understand, causing retries. Empty 200 OK matches real cloud behavior.
 
 function generatePresetsXml() {
+    if (FORCE_EMPTY_PRESETS) return '<presets/>';
     const time = getTimestamp();
     // Sourced from utils.getHybridPresetDefinitions() so this cloud-delivered XML and
-    // the Preset Watchdog's direct WAPI storePreset write can never define "Hybrid
-    // Preset N" differently.
+    // the Preset Watchdog's direct WAPI storePreset write "Hybrid Preset N" the same
     const definitions = utils.getHybridPresetDefinitions();
     let presetsXml = '<presets>';
 
@@ -245,27 +249,31 @@ router.post('/streaming/support/power_on', (req, res) => {
     if (isDebug()) console.log(`[Bose Cloud] ⚡ Power On Signal Handled for ${reqIp}`);
     res.send('<status>success</status>'); 
 	
-	// FIX: Only initialize the tracker if one doesn't already exist.
-    // This prevents late power_on pings from erasing a successful handshake!
+    // Whichever event fires first (BMX or power_on) initializes the tracker and starts
+    // the 30s evaluation window. Each handler then sets its own flag independently so
+    // neither ordering loses a flag.
     if (!handshakeTracker[reqIp]) {
-        handshakeTracker[reqIp] = { powerOn: true, bmx: false, sourceProviders: false, presets: false };
-        
-        // Give slow speakers 30 seconds to fully boot and pull XMLs instead of 15
+        handshakeTracker[reqIp] = { powerOn: false, bmx: false, sourceProviders: false, presets: false };
         setTimeout(() => evaluateHandshake(reqIp), 30000);
     }
+    handshakeTracker[reqIp].powerOn = true;
 });
 
 // 2. BMX Registry (Cloud Routing)
 router.get('/bmx/registry/v1/services', (req, res) => {
     const reqIp = getIp(req);
-    if (handshakeTracker[reqIp]) handshakeTracker[reqIp].bmx = true;
+    if (!handshakeTracker[reqIp]) {
+        handshakeTracker[reqIp] = { powerOn: false, bmx: false, sourceProviders: false, presets: false };
+        setTimeout(() => evaluateHandshake(reqIp), 30000);
+    }
+    handshakeTracker[reqIp].bmx = true;
     if (isDebug()) console.log(`[Bose Cloud] ☁️ Delivered BMX Registry to ${reqIp}`);
     res.set('Content-Type', 'application/json');
     
     // askAgainAfter: how long (ms) the speaker waits before re-checking BMX services.
     // Real Bose cloud used 1230482 (~20.5 min) per julius-d's UberBoseOpenAPI capture.
     // Set to 7 days (604800000) to minimize mid-standby re-validation events that wipe presets.
-    // The 2am preset audit is the safety net for any preset loss that still occurs.
+    // Nightly preset audit is safety net for any preset loss that still occurs.
     const registryData = {
         "_links": { "bmx_services_availability": { "href": "../servicesAvailability" } },
         "askAgainAfter": 604800000,
@@ -378,9 +386,13 @@ router.get('/streaming/account/:id/device/:deviceId/group/', async (req, res) =>
 // NOISY BOSE TELEMETRY TRAPS (Silently dropped)
 // ============================================================================
 
-// Express 5 Native RegExp Catch-Alls (No quotes!)
+// Express 5 Native RegExp Catch-Alls
 router.post(/^\/events.*/, (req, res) => res.status(200).send("OK"));
-router.post(/^\/v1\/scmudc.*/, (req, res) => res.status(200).send());
+router.post(/^\/v1\/scmudc.*/, (req, res) => {
+    //console.log(`[scmudc] 📡 Telemetry from ${getIp(req)}: ${JSON.stringify(req.body)}`);
+	// This is all you get so nothing actionable to use here  WS Raw [192.168.4.48]: <userActivityUpdate deviceID="9884E384F8B2" />
+    res.status(200).send();
+});
 router.get(/^\/updates.*/, (req, res) => res.status(404).send("Not Found"));
 
 // Standard Express 5 Parameter Routes

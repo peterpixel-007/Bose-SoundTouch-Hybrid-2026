@@ -661,6 +661,11 @@
 		            if (observeRadio) observeRadio.checked = (wMode === 'observe');
 		            const intervalRow = document.getElementById('watchdogIntervalRow');
 		            if (intervalRow) intervalRow.style.display = (wMode === 'push') ? '' : 'none';
+
+		            // Re-render watchdog list now that fullSettingsPayload is populated.
+		            // loadTools() may have already called initPresetWatchdogUI() before this
+		            // fetch completed, causing the list to render with 0 speakers.
+		            renderWatchdogSpeakers();
 		        }
 		    } catch (e) {
 		        console.error("Failed to load settings from server", e);
@@ -1175,6 +1180,7 @@ async function saveScheduledPlays(silent = false) {
 		    if (!ip) return alert('Please select a speaker.');
 
 		    if (!Array.isArray(fullSettingsPayload.presetWatchdogSpeakers)) fullSettingsPayload.presetWatchdogSpeakers = [];
+		    if (fullSettingsPayload.presetWatchdogSpeakers.includes(ip)) return;
 		    fullSettingsPayload.presetWatchdogSpeakers.push(ip);
 		    renderWatchdogSpeakers();
 		    await saveWatchdogSpeakers();
