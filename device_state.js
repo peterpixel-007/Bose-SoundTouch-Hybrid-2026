@@ -315,7 +315,9 @@ async function initDevice(device) {
             if (FINAL_STATE[device.ip] && FINAL_STATE[device.ip].online === false) {
                 console.log(`[DeviceState] ☀️ Watchdog detected ${device.ip} is back online!`);
                 FINAL_STATE[device.ip].online = true;
-                
+                if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.includes(device.ip)) {
+                    utils.appendWatchdogLog(device.ip, { ts: new Date().toISOString(), type: 'speaker_online' });
+                }
                 // Force an immediate fetch to instantly expand the UI card
                 await processSettledState(device.ip);
             }
@@ -324,7 +326,9 @@ async function initDevice(device) {
             if (FINAL_STATE[device.ip] && FINAL_STATE[device.ip].online === true) {
                 console.log(`[DeviceState] 🌩️ Watchdog detected ${device.ip} dropped offline.`);
                 FINAL_STATE[device.ip].online = false;
-                
+                if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.includes(device.ip)) {
+                    utils.appendWatchdogLog(device.ip, { ts: new Date().toISOString(), type: 'speaker_offline' });
+                }
                 // Forcefully kill the zombie WebSocket
                 if (activeWs) activeWs.terminate();
             }

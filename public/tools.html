@@ -359,9 +359,9 @@
 
 				<div style="margin-bottom: 14px;">
 					<div style="font-size: 0.8em; font-weight: bold; color: var(--text-secondary); margin-bottom: 8px; letter-spacing: 0.04em;">WATCHDOG MODE</div>
-					<label class="pref-label" style="display: flex; align-items: center; gap: 8px; margin-bottom: 7px;">
-						<input type="radio" name="watchdogMode" id="watchdogModePush" value="push" onchange="onWatchdogModeChange()">
-						🔁 Push Presets — re-write all 6 presets on interval
+					<label class="pref-label" style="display: flex; align-items: center; gap: 8px; margin-bottom: 7px; opacity: 0.4; cursor: not-allowed;">
+						<input type="radio" name="watchdogMode" id="watchdogModePush" value="push" disabled>
+						🔁 Push Presets — re-write all 6 presets on interval (temporarily disabled)
 					</label>
 					<label class="pref-label" style="display: flex; align-items: center; gap: 8px;">
 						<input type="radio" name="watchdogMode" id="watchdogModeObserve" value="observe" onchange="onWatchdogModeChange()">
@@ -654,7 +654,7 @@
 		            renderScheduledPlays();
 
 		            // Restore watchdog mode radio + interval row visibility
-		            const wMode = fullSettingsPayload.presetWatchdogMode || 'push';
+		            const wMode = fullSettingsPayload.presetWatchdogMode || 'observe';
 		            const pushRadio    = document.getElementById('watchdogModePush');
 		            const observeRadio = document.getElementById('watchdogModeObserve');
 		            if (pushRadio)    pushRadio.checked    = (wMode === 'push');
@@ -1194,10 +1194,11 @@ async function saveScheduledPlays(silent = false) {
 		}
 
 		function onWatchdogModeChange() {
-		    const mode = document.querySelector('input[name="watchdogMode"]:checked')?.value || 'push';
+		    const mode = document.querySelector('input[name="watchdogMode"]:checked')?.value || 'observe';
 		    const intervalRow = document.getElementById('watchdogIntervalRow');
 		    if (intervalRow) intervalRow.style.display = (mode === 'push') ? '' : 'none';
 		    fullSettingsPayload.presetWatchdogMode = mode;
+		    renderWatchdogSpeakers();
 		    saveWatchdogSpeakers();
 		}
 

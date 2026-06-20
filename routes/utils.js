@@ -178,7 +178,7 @@ function appendWatchdogLog(ip, entry) {
     entries = entries.filter(e => new Date(e.ts).getTime() > cutoff);
 
     try {
-        fs.writeFileSync(logPath, JSON.stringify(entries, null, 2));
+        fs.writeFileSync(logPath, '[\n  ' + entries.map(e => JSON.stringify(e)).join(',\n  ') + '\n]');
     } catch (e) {
         console.error(`[Watchdog] ❌ Failed to write log for ${ip}:`, e.message);
     }

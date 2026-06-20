@@ -43,6 +43,15 @@ async function evaluateHandshake(ip) {
     // Evaluate success condition once to keep the code below clean and readable
     const isSuccess = state.presets && state.sourceProviders && state.bmx;
 
+    if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.includes(ip)) {
+        utils.appendWatchdogLog(ip, {
+            ts:      new Date().toISOString(),
+            type:    'handshake_result',
+            success: isSuccess,
+            steps:   { powerOn: state.powerOn, bmx: state.bmx, sourceProviders: state.sourceProviders, presets: state.presets }
+        });
+    }
+
     if (isDebug()) {
         console.log(`\n=======================================================================`);
         console.log(`[Bose Cloud] HANDSHAKE DIAGNOSTIC REPORT FOR ${ip}`);
@@ -312,15 +321,19 @@ router.get('/streaming/account/:id/full', async (req, res) => {
     //const reqIp = req.query.ip || getIp(req);
     const accountId = req.params.id;
     
-    if (handshakeTracker[reqIp]) handshakeTracker[reqIp].presets = true;
     console.log(`[Bose Cloud] 📥 Account Profile requested by ${reqIp}. Fetching identity...`);
-    
+
     const identity = await getSpeakerIdentity(reqIp);
     if (identity.deviceId === "UNKNOWN") {
+        console.log(`[Bose Cloud] ⚠️ Account Profile FAILED for ${reqIp} — speaker identity unresolvable (port 8090 not ready). Returned 503. Presets NOT delivered.`);
+        if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.includes(reqIp)) {
+            utils.appendWatchdogLog(reqIp, { ts: new Date().toISOString(), type: 'account_profile_failed', reason: 'speaker identity unresolvable (port 8090 not ready)' });
+        }
         return res.status(503).send("Speaker Busy");
     }
 
-    res.send(generateAccountXml(reqIp, accountId, identity.deviceId, identity.serialNumber, identity.name)); 
+    if (handshakeTracker[reqIp]) handshakeTracker[reqIp].presets = true;
+    res.send(generateAccountXml(reqIp, accountId, identity.deviceId, identity.serialNumber, identity.name));
 });
 
 router.get('/streaming/account/:id/device/:deviceId/presets', (req, res) => {
