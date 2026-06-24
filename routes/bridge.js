@@ -42,23 +42,7 @@ router.get('/preset/:id.mp3', async (req, res) => {
     const id = parseInt(req.params.id);
     const ip = (req.ip || req.connection.remoteAddress).replace('::ffff:', '');
     
-    // --- NEW: Check if the WebSocket Bypass is enabled ---
-    const fs = require('fs');
-    const path = require('path');
-    const settingsPath = path.join(process.cwd(), 'config', 'settings.json');
-    let bypassEnabled = false;
-    if (fs.existsSync(settingsPath)) {
-        try {
-            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-            bypassEnabled = settings.bypassCloudEmulation === true;
-        } catch(e) {}
-    }
-
-    if (bypassEnabled) {
-        console.log(`\n🔘 PHYSICAL PRESS: P${id} from ${ip} (HTTP Ignored -> WS Bypass Active)`);
-    } else {
-        console.log(`\n🔘 PHYSICAL PRESS: P${id} from ${ip}`);
-    }
+    console.log(`\n🔘 PHYSICAL PRESS: P${id} from ${ip}`);
 
     // 1. Tell the speaker this is a valid continuous radio stream
     res.set({
@@ -78,15 +62,13 @@ router.get('/preset/:id.mp3', async (req, res) => {
         clearInterval(silenceLoop);
     });
 
-    // 4. Trigger Music Assistant (Only if WS bypass is OFF to prevent double-firing!)
-    if (!bypassEnabled) {
-        const success = await utils.executeSmartPreset(ip, id);
-        
-        // 🌟 RESTORED LOGIC: If no item is assigned, kill the silence loop so it doesn't hang!
-        if (!success) {
-            clearInterval(silenceLoop);
-            res.end();
-        }
+    // 4. Trigger Music Assistant
+    const success = await utils.executeSmartPreset(ip, id);
+
+    // If no item is assigned, kill the silence loop so it doesn't hang
+    if (!success) {
+        clearInterval(silenceLoop);
+        res.end();
     }
 });
 

@@ -12,6 +12,20 @@
   <script src="global_ui.js"></script>
 </head>
 <body>
+
+<div id="pin-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.88); z-index:9999; align-items:center; justify-content:center; flex-direction:column;">
+    <div style="background:var(--card-bg,#1e1e2e); border:1px solid rgba(255,255,255,0.1); border-radius:14px; padding:40px 36px; max-width:340px; width:90%; text-align:center; box-shadow:0 12px 40px rgba(0,0,0,0.6);">
+        <img src="images/hybrid_icon.png" style="height:48px; margin-bottom:16px; opacity:0.9;">
+        <h2 style="margin:0 0 8px; color:var(--text,#fff); font-size:1.2em; font-weight:600;">Protected Area</h2>
+        <p style="color:rgba(255,255,255,0.5); font-size:0.88em; margin:0 0 24px; line-height:1.5;">Enter your access code to continue.</p>
+        <input type="password" id="pin-input" placeholder="Access code" autocomplete="off"
+            style="width:100%; box-sizing:border-box; padding:12px; font-size:1.1em; border:1px solid rgba(255,255,255,0.15); border-radius:8px; background:rgba(255,255,255,0.07); color:#fff; text-align:center; margin-bottom:8px; letter-spacing:0.1em;"
+            onkeydown="if(event.key==='Enter') submitPin()">
+        <div id="pin-error" style="color:#e74c3c; font-size:0.83em; min-height:18px; margin-bottom:14px;"></div>
+        <button onclick="submitPin()" style="width:100%; padding:12px; background:#3498db; color:#fff; border:none; border-radius:8px; font-size:1em; cursor:pointer; font-weight:500;">Unlock</button>
+    </div>
+</div>
+
 <div class="container">
   <div class="global-nav">
 	<div class="header-brand">
@@ -324,6 +338,50 @@ async function toggleSource(ip, btn) {
           }
       } catch(e) {
           console.error("Failed to toggle source", e);
+      }
+  }
+
+  (async function initRestrictedAccess() {
+      try {
+          const res = await fetch('/api/admin/settings');
+          if (!res.ok) return;
+          const s = await res.json();
+          if (!s.restrictedMode || !s.adminPin) return;
+          let token = localStorage.getItem('adminSessionToken');
+          if (token) {
+              const chk = await fetch(`/api/admin/check-session?token=${encodeURIComponent(token)}`);
+              if ((await chk.json()).valid) return;
+          }
+          document.getElementById('pin-overlay').style.display = 'flex';
+          setTimeout(() => document.getElementById('pin-input').focus(), 50);
+      } catch (e) {}
+  })();
+
+  async function submitPin() {
+      const pin = document.getElementById('pin-input').value.trim();
+      const errEl = document.getElementById('pin-error');
+      if (!pin) { errEl.textContent = 'Please enter your access code.'; return; }
+      let token = localStorage.getItem('adminSessionToken');
+      if (!token) {
+          token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+          localStorage.setItem('adminSessionToken', token);
+      }
+      try {
+          const res = await fetch('/api/admin/verify-pin', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pin, token })
+          });
+          const data = await res.json();
+          if (data.success) {
+              document.getElementById('pin-overlay').style.display = 'none';
+          } else {
+              errEl.textContent = 'Incorrect code. Try again.';
+              document.getElementById('pin-input').value = '';
+              document.getElementById('pin-input').focus();
+          }
+      } catch (e) {
+          errEl.textContent = 'Connection error. Try again.';
       }
   }
 

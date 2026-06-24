@@ -21,8 +21,53 @@ const LAST_METADATA = {};
 const STOP_TIMERS = {}; // Replaces STOP_COUNTS for WebSocket time
 const EXPECTATIONS = {}; // Tracks active UI Locks
 const TRACK_TIME_ANCHOR = {}; // Fixes Bose gapless time accumulation
+const AIRPLAY_PAUSE_INTENT = {}; // ip → true when user paused AirPlay (session terminates, not a real stop)
+const AIRPLAY_RESUME_DEBOUNCE = {}; // ip → true, prevents rapid re-trigger on remote resume
+const AIRPLAY_PENDING_RESUME = {}; // ip → true when remote PLAY_PAUSE was pressed during teardown window (before INVALID_SOURCE)
+const DLNA_PAUSE_INTENT = {}; // ip → true when hardware remote paused a DLNA stream (MASS not yet synced)
+const USER_ACTIVITY_TIMER = {};   // ip → timeout handle for coalescing remote resume detection
 const WAKE_MEMORY = {}; // App Mem for Behavior 4
 const AUTO_RESUME_TIMERS = {}; // Tracks timers thy can be cancelled if interrupted
+
+// --- PERSISTENT AUTO-RESUME STATE ---
+const RESUME_STATE_PATH = path.join(process.cwd(), 'config', 'resume_state.json');
+
+function saveResumeState() {
+    try {
+        fs.writeFileSync(RESUME_STATE_PATH, JSON.stringify(WAKE_MEMORY, null, 2));
+    } catch (e) {
+        console.error('[DeviceState] ⚠️ Failed to save resume_state.json:', e.message);
+    }
+}
+
+// Load persisted resume state on startup; prune IPs not in speakers.json
+(function loadResumeState() {
+    try {
+        if (!fs.existsSync(RESUME_STATE_PATH)) return;
+        const speakersPath = path.join(process.cwd(), 'config', 'speakers.json');
+        const knownIps = new Set(
+            fs.existsSync(speakersPath)
+                ? JSON.parse(fs.readFileSync(speakersPath, 'utf8')).map(s => s.ip)
+                : []
+        );
+        const saved = JSON.parse(fs.readFileSync(RESUME_STATE_PATH, 'utf8'));
+        let pruned = false;
+        for (const [ip, presetId] of Object.entries(saved)) {
+            if (knownIps.size > 0 && !knownIps.has(ip)) { pruned = true; continue; }
+            if (Number.isInteger(presetId) && presetId >= 1 && presetId <= 6) {
+                WAKE_MEMORY[ip] = presetId;
+            }
+        }
+        if (pruned) {
+            fs.writeFileSync(RESUME_STATE_PATH, JSON.stringify(WAKE_MEMORY, null, 2));
+            console.log('[DeviceState] 🧹 resume_state.json: orphan IPs pruned.');
+        }
+        const count = Object.keys(WAKE_MEMORY).length;
+        if (count > 0) console.log(`[DeviceState] 💾 Auto-resume state loaded: ${count} speaker(s).`);
+    } catch (e) {
+        console.error('[DeviceState] ⚠️ Could not load resume_state.json:', e.message);
+    }
+})();
 
 // BAD_META: List of keywords indicating the speaker is not playing real content.
 const BAD_META = ["MUSIC ASSISTANT", "READY", "OBJECT", "LOADING...", "", "AIRPLAY", "UNKNOWN", "STOPPED", "STANDBY", "UPNP", "INVALID_SOURCE", "NULL"];
@@ -115,7 +160,7 @@ function resolveMetadataAndStatus(nativeData, massData, source, isPausedByShadow
     let isMaActive = false; 
     
     if (massData) {
-        if ((massData.state === 'idle' || massData.state === 'stopped') && !mass.isRecovering(deviceIp)) {
+        if ((massData.state === 'idle' || massData.state === 'stopped') && !mass.isRecovering(deviceIp) && !isPausedByShadow) {
             finalStatus = 'STOP_STATE';
             wipeMetadata = true;
         } else if (isPausedByShadow) {
@@ -196,9 +241,11 @@ function handleWakeMemory(ip, isStandby, activePreset, finalPlayStatus, source) 
 
         if (activePreset > 0) {
             WAKE_MEMORY[ip] = activePreset;
+            saveResumeState();
         } else if (isGenuineStream) {
             // Playing genuine non-preset stream -> forget memory so it boots to vanilla Wi-Fi
             delete WAKE_MEMORY[ip];
+            saveResumeState();
         }
     }
     
@@ -315,7 +362,7 @@ async function initDevice(device) {
             if (FINAL_STATE[device.ip] && FINAL_STATE[device.ip].online === false) {
                 console.log(`[DeviceState] ☀️ Watchdog detected ${device.ip} is back online!`);
                 FINAL_STATE[device.ip].online = true;
-                if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.includes(device.ip)) {
+                if (global.WATCHDOG_SPEAKERS?.includes(device.ip)) {
                     utils.appendWatchdogLog(device.ip, { ts: new Date().toISOString(), type: 'speaker_online' });
                 }
                 // Force an immediate fetch to instantly expand the UI card
@@ -326,7 +373,7 @@ async function initDevice(device) {
             if (FINAL_STATE[device.ip] && FINAL_STATE[device.ip].online === true) {
                 console.log(`[DeviceState] 🌩️ Watchdog detected ${device.ip} dropped offline.`);
                 FINAL_STATE[device.ip].online = false;
-                if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.includes(device.ip)) {
+                if (global.WATCHDOG_SPEAKERS?.includes(device.ip)) {
                     utils.appendWatchdogLog(device.ip, { ts: new Date().toISOString(), type: 'speaker_offline' });
                 }
                 // Forcefully kill the zombie WebSocket
@@ -388,35 +435,102 @@ async function initDevice(device) {
                 const parser = new xml2js.Parser({ explicitArray: false });
                 const result = await parser.parseStringPromise(rawXml);
 
+                // userActivityUpdate: fires on ANY physical remote button press (play, volume, preset, power).
+                // Not wrapped in <updates> so it falls through normal processing.
+                // We use coalescing to identify PLAY_PAUSE specifically: it is the only button that
+                // fires userActivityUpdate with NO subsequent state event (nowPlayingUpdated /
+                // volumeUpdated / nowSelectionUpdated) when the speaker is in INVALID_SOURCE.
+                // Volume → also fires volumeUpdated. Presets → also fire nowSelectionUpdated.
+                // Power → also fires nowPlayingUpdated (STANDBY). Only PLAY_PAUSE leaves silence.
+                if (result.userActivityUpdate) {
+                    const ip = device.ip;
+                    if (AIRPLAY_PAUSE_INTENT[ip] && FINAL_STATE[ip]) {
+                        const currentSource = FINAL_STATE[ip].source;
+                        if (currentSource === 'INVALID_SOURCE') {
+                            // Pseudo-pause established. 800ms coalescing timer → resume on silence.
+                            // Volume/preset/power all cancel the timer via their WebSocket events.
+                            if (USER_ACTIVITY_TIMER[ip]) clearTimeout(USER_ACTIVITY_TIMER[ip]);
+                            USER_ACTIVITY_TIMER[ip] = setTimeout(() => {
+                                delete USER_ACTIVITY_TIMER[ip];
+                                const state = FINAL_STATE[ip];
+                                if (AIRPLAY_PAUSE_INTENT[ip] && state && state.source === 'INVALID_SOURCE' && !AIRPLAY_RESUME_DEBOUNCE[ip] && !mass.isRecovering(ip)) {
+                                    AIRPLAY_RESUME_DEBOUNCE[ip] = true;
+                                    setTimeout(() => { delete AIRPLAY_RESUME_DEBOUNCE[ip]; }, 3000);
+                                    console.log(`[DeviceState] ▶️ Remote resume detected on ${ip}. Triggering MASS play...`);
+                                    delete AIRPLAY_PAUSE_INTENT[ip];
+                                    setExpectation(ip, 'PLAY_STATUS', 'PLAYING');
+                                    mass.play(ip).catch(() => {});
+                                }
+                            }, 800);
+                        } else if (currentSource === 'AIRPLAY') {
+                            // AirPlay session still tearing down (INVALID_SOURCE not yet arrived).
+                            // Use same 800ms coalescing to distinguish PLAY_PAUSE from volume/preset.
+                            // Volume → also fires volumeUpdated (cancels timer). Presets → nowSelectionUpdated.
+                            // If silence after 800ms: PLAY_PAUSE confirmed. Set PENDING_RESUME so
+                            // processSettledState auto-resumes when INVALID_SOURCE is confirmed.
+                            if (USER_ACTIVITY_TIMER[ip]) clearTimeout(USER_ACTIVITY_TIMER[ip]);
+                            USER_ACTIVITY_TIMER[ip] = setTimeout(() => {
+                                delete USER_ACTIVITY_TIMER[ip];
+                                if (AIRPLAY_PAUSE_INTENT[ip] && FINAL_STATE[ip] && FINAL_STATE[ip].source === 'AIRPLAY') {
+                                    console.log(`[DeviceState] ⏳ Remote PLAY_PAUSE during AirPlay teardown (${ip}). Resume queued for INVALID_SOURCE.`);
+                                    AIRPLAY_PENDING_RESUME[ip] = true;
+                                }
+                            }, 800);
+                        }
+                    }
+                    return;
+                }
+
+                // DLNA skip: physical remote NEXT/PREV sends UPnP SkipNext/SkipPrev to MASS's
+                // DLNA renderer. Flow Mode can't service it (single continuous stream) → MASS
+                // returns an error → speaker fires errorUpdate and drops the DLNA connection.
+                // Intercept here and route the skip to MASS via its own HTTP API.
+                if (result.errorUpdate) {
+                    const ip = device.ip;
+                    const errorName = result.errorUpdate.error?.$?.name;
+                    if (errorName === 'QPLAY_SKIP_NEXT_FAILED') {
+                        console.log(`[DeviceState] ⏭️ Remote NEXT detected on ${ip} (DLNA skip intercepted). Routing to MASS...`);
+                        setExpectation(ip, 'PLAY_STATUS', 'PLAYING');
+                        mass.next(ip).catch(() => {});
+                    } else if (errorName === 'QPLAY_SKIP_PREV_FAILED') {
+                        console.log(`[DeviceState] ⏮️ Remote PREVIOUS detected on ${ip} (DLNA skip intercepted). Routing to MASS...`);
+                        setExpectation(ip, 'PLAY_STATUS', 'PLAYING');
+                        mass.previous(ip).catch(() => {});
+                    }
+                    return;
+                }
+
                 if (!result.updates) return;
 
                 if (result.updates.nowPlayingUpdated) {
                     const np = result.updates.nowPlayingUpdated.nowPlaying;
-                    NATIVE_CACHE[device.ip].nowPlaying = np; 
+                    NATIVE_CACHE[device.ip].nowPlaying = np;
                     if (np.playStatus !== undefined) NATIVE_CACHE[device.ip].playStatus = np.playStatus;
+                    if (USER_ACTIVITY_TIMER[device.ip]) { clearTimeout(USER_ACTIVITY_TIMER[device.ip]); delete USER_ACTIVITY_TIMER[device.ip]; }
                 }
                 if (result.updates.volumeUpdated) {
                     NATIVE_CACHE[device.ip].volume = parseInt(result.updates.volumeUpdated.volume.actualvolume);
+                    if (USER_ACTIVITY_TIMER[device.ip]) { clearTimeout(USER_ACTIVITY_TIMER[device.ip]); delete USER_ACTIVITY_TIMER[device.ip]; }
+                    delete AIRPLAY_PENDING_RESUME[device.ip];
                 }
                 
                 if (result.updates.nowSelectionUpdated) {
+                    if (USER_ACTIVITY_TIMER[device.ip]) { clearTimeout(USER_ACTIVITY_TIMER[device.ip]); delete USER_ACTIVITY_TIMER[device.ip]; }
+                    delete AIRPLAY_PENDING_RESUME[device.ip];
                     const selection = result.updates.nowSelectionUpdated;
                     let presetId = 0;
                     if (selection.preset) {
                         presetId = parseInt(selection.preset.id || (selection.preset.$ && selection.preset.$.id) || 0);
                     }
                     if (presetId > 0) {
-                        const settingsPath = path.join(process.cwd(), 'config', 'settings.json');
-                        let bypassEnabled = false;
-                        if (fs.existsSync(settingsPath)) {
-                            try {
-                                const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-                                bypassEnabled = settings.bypassCloudEmulation === true; 
-                            } catch(e) {}
-                        }
-                        if (bypassEnabled) {
-                            console.log(`\n[DeviceState] 🚀 Bypass Cloud ON: Intercepted WebSocket selection for Preset ${presetId} on ${device.ip}`);
-                            utils.executeSmartPreset(device.ip, presetId);
+                        const ci = selection.preset?.ContentItem;
+                        if (ci) {
+                            const source   = ci.$?.source   || ci.source   || '';
+                            const location = ci.$?.location || ci.location || '';
+                            if (!utils.isHybridContentItem(source, location)) {
+                                console.log(`\n[DeviceState] 🔁 Preset ${presetId} on ${device.ip} — non-hybrid URL detected, routing to MASS directly`);
+                                utils.executeSmartPreset(device.ip, presetId);
+                            }
                         }
                     }
                 }
@@ -556,11 +670,16 @@ async function processSettledState(ip) {
         let massIsActiveDriver = false;
         const isMassSourceType = (source === 'UPNP' || source === 'AIRPLAY');
         // THE STICKY DRIVER
-        // If Bose pauses a DLNA stream, it drops the socket and reports INVALID_SOURCE.
-        // so remember MASS is still driving so the Resume button routes correctly
+        // MASS 2.7.x: pausing a DLNA stream terminated the HTTP connection, causing Bose to
+        // report INVALID_SOURCE. The wasMassDriving+isOrphaned branch was the primary path.
+        //
+        // MASS 2.8.x (PR #3704): MASS now sends a proper UPnP AVTransport Pause command.
+        // Bose keeps the DLNA connection alive and reports PAUSE_STATE with source=UPNP.
+        // For clean DLNA pauses, isMassSourceType handles it — wasMassDriving+isOrphaned
+        // no longer fires. It remains as a safety net for unexpected stream drops, network
+        // blips, and AirPlay hard-stop scenarios where INVALID_SOURCE still appears.
         const wasMassDriving = LAST_VALID_STATE[ip] && LAST_VALID_STATE[ip].massIsActiveDriver;
         const isOrphaned = (!source || source === 'INVALID_SOURCE' || source === 'Ready');
-        // Use the variables to decide if we should check MASS!
         const shouldCheckMass = isMassSourceType || (wasMassDriving && isOrphaned);
 
         if (shouldCheckMass && !isStandby) {
@@ -586,7 +705,31 @@ async function processSettledState(ip) {
                         rawStatus: rawStatus,
                         type: finalMediaType
                     };
-                    const overrides = resolveMetadataAndStatus(nativeState, maData, source, false, ip);
+                    // AirPlay pause terminates the session → Bose reports INVALID_SOURCE.
+                    // MASS reports 'idle'/'stopped' when the AirPlay connection drops, NOT 'paused'.
+                    // We detect user intent via AIRPLAY_PAUSE_INTENT; auto-clear it when MASS resumes.
+                    // Guard: only clear when native hardware is genuinely playing (PLAY/BUFFERING).
+                    // PAUSE_STATE or STOP_STATE here means we're mid-teardown — MASS may transiently
+                    // report 'playing' before processing the pause command, causing a false clear.
+                    if (AIRPLAY_PAUSE_INTENT[ip] && maData.state === 'playing' && finalPlayStatus === 'PLAY_STATE') delete AIRPLAY_PAUSE_INTENT[ip];
+                    const isPausedByShadow = isOrphaned && (
+                        maData.state === 'paused' ||
+                        (AIRPLAY_PAUSE_INTENT[ip] && (maData.state === 'idle' || maData.state === 'stopped'))
+                    );
+                    // Deferred remote resume: user pressed PLAY_PAUSE during the 12-14s AirPlay teardown
+                    // window (before INVALID_SOURCE was established). AIRPLAY_PENDING_RESUME was set
+                    // via the userActivityUpdate coalescing timer. Now that INVALID_SOURCE is confirmed
+                    // and isPausedByShadow is true, fire mass.play() automatically.
+                    if (isPausedByShadow && AIRPLAY_PENDING_RESUME[ip] && !AIRPLAY_RESUME_DEBOUNCE[ip] && !mass.isRecovering(ip)) {
+                        console.log(`[DeviceState] ▶️ Deferred remote resume (${ip}) — pending from teardown window. Triggering MASS play...`);
+                        delete AIRPLAY_PENDING_RESUME[ip];
+                        delete AIRPLAY_PAUSE_INTENT[ip];
+                        AIRPLAY_RESUME_DEBOUNCE[ip] = true;
+                        setTimeout(() => { delete AIRPLAY_RESUME_DEBOUNCE[ip]; }, 3000);
+                        setExpectation(ip, 'PLAY_STATUS', 'PLAYING');
+                        mass.play(ip).catch(() => {});
+                    }
+                    const overrides = resolveMetadataAndStatus(nativeState, maData, source, isPausedByShadow, ip);
 
                     finalTrack = overrides.track;
                     finalArtist = overrides.artist;
@@ -614,15 +757,6 @@ async function processSettledState(ip) {
                         }
                     }
                 }
-
-                const overrides = resolveMetadataAndStatus(nativeState, maData, source, false, ip);
-
-                finalTrack = overrides.track;
-                finalArtist = overrides.artist;
-                finalAlbum = overrides.album;
-                finalArt = overrides.art;
-                finalPlayStatus = overrides.playStatus;
-                finalMediaType = overrides.mediaType;
             } catch (e) {
                 // Silently ignore MA fetch errors
             }
@@ -671,6 +805,34 @@ async function processSettledState(ip) {
 	
 	// --- DELEGATE BEHAVIOR 4 LOGIC ---
     handleWakeMemory(ip, isStandby, activePreset, finalPlayStatus, source);
+
+    // --- REMOTE AIRPLAY PAUSE SYNC ---
+    // Physical remote pause: hardware reports PAUSE_STATE with source=AIRPLAY (session still alive).
+    // MASS doesn't know — it keeps streaming → music keeps playing.
+    // Intercept here and call mass.pause() to terminate the session.
+    // isPausedByShadow then handles the resulting INVALID_SOURCE as a pseudo-paused state.
+    if (finalPlayStatus === 'PAUSE_STATE' && source === 'AIRPLAY' && massIsActiveDriver && !AIRPLAY_PAUSE_INTENT[ip] && !mass.isRecovering(ip)) {
+        console.log(`[DeviceState] 🎮 Remote pause detected on AirPlay (${ip}). Syncing MASS...`);
+        AIRPLAY_PAUSE_INTENT[ip] = true;
+        mass.pause(ip).catch(() => {});
+    }
+
+    // --- REMOTE DLNA PAUSE/RESUME SYNC ---
+    // Physical remote pause on DLNA: hardware reports PAUSE_STATE with source=UPNP but our Control
+    // layer never called mass.pause(). No EXPECTATIONS lock means the UI didn't initiate this.
+    // Sync MASS now so the stream is properly paused; DLNA_PAUSE_INTENT flags that resume must
+    // also route through MASS (same path as the UI) rather than relying on UPnP events alone.
+    if (source !== 'UPNP' && DLNA_PAUSE_INTENT[ip]) delete DLNA_PAUSE_INTENT[ip]; // stale flag guard
+    if (finalPlayStatus === 'PAUSE_STATE' && source === 'UPNP' && massIsActiveDriver && !EXPECTATIONS[ip] && !DLNA_PAUSE_INTENT[ip] && !mass.isRecovering(ip)) {
+        console.log(`[DeviceState] 🎮 Remote pause detected on DLNA (${ip}). Syncing MASS...`);
+        DLNA_PAUSE_INTENT[ip] = true;
+        mass.pause(ip).catch(() => {});
+    }
+    if (finalPlayStatus === 'PLAY_STATE' && source === 'UPNP' && massIsActiveDriver && DLNA_PAUSE_INTENT[ip] && !mass.isRecovering(ip)) {
+        console.log(`[DeviceState] ▶️ Remote resume detected on DLNA (${ip}). Routing to MASS...`);
+        delete DLNA_PAUSE_INTENT[ip];
+        mass.play(ip).catch(() => {});
+    }
 
     let artPlaceholder = 'art-blank';
     if (isStandby) {
@@ -774,13 +936,17 @@ async function processSettledState(ip) {
             if (finalPlayStatus === 'PLAY_STATE') {
                 if (!lastState || lastState.track !== finalTrack || lastState.playStatus !== finalPlayStatus) {
                     console.log(`[DeviceState] 🎵 ${ip} playing "${finalTrack || 'Unknown'}" via ${finalProvider || source || 'Unknown'}`);
-                    if (source === 'INVALID_SOURCE' && global.WATCHDOG_MODE === 'observe' && global.WATCHDOG_SPEAKERS?.includes(ip)) {
+                    if (source === 'INVALID_SOURCE' && global.WATCHDOG_SPEAKERS?.includes(ip)) {
                         utils.appendWatchdogLog(ip, { ts: new Date().toISOString(), type: 'ws_event', source: 'INVALID_SOURCE' });
                     }
                 }
             } else if (isStandby) {
                 if (!lastState || !lastState.isStandby) {
                     console.log(`[DeviceState] 💤 ${ip} entered Standby.`);
+                }
+            } else if (finalPlayStatus === 'PAUSE_STATE') {
+                if (!lastState || lastState.playStatus !== 'PAUSE_STATE') {
+                    console.log(`[DeviceState] ⏸️ ${ip} paused.`);
                 }
             }
         }
@@ -834,9 +1000,22 @@ async function get(device) {
 
 function clearSession(ip) {
     console.log(`[DeviceState] 🧹 Session Cleared for ${ip} (Power Down / Reset)`);
+    delete AIRPLAY_PAUSE_INTENT[ip];
+    delete AIRPLAY_RESUME_DEBOUNCE[ip];
+    delete AIRPLAY_PENDING_RESUME[ip];
+    delete DLNA_PAUSE_INTENT[ip];
+    if (USER_ACTIVITY_TIMER[ip]) { clearTimeout(USER_ACTIVITY_TIMER[ip]); delete USER_ACTIVITY_TIMER[ip]; }
     // Explicitly lock the UI during power down so the power button doesn't bounce!
     EXPECTATIONS[ip] = { type: 'POWER', expires: Date.now() + 5000 };
     if (FINAL_STATE[ip]) FINAL_STATE[ip].readyForDisplay = false;
+}
+
+function setAirplayPauseIntent(ip) {
+    AIRPLAY_PAUSE_INTENT[ip] = true;
+}
+
+function clearAirplayPauseIntent(ip) {
+    delete AIRPLAY_PAUSE_INTENT[ip];
 }
 
 function setExpectation(target, type, value, extraContext = null) {
@@ -856,8 +1035,9 @@ function setExpectation(target, type, value, extraContext = null) {
 
     if (!FINAL_STATE[ip]) return;
     
-    // 2. Set the Lock
-    EXPECTATIONS[ip] = { type, value, context: extraContext, expires: Date.now() + 8000 };
+    // 2. Set the Lock — PLAY_STATUS gets extra time since AirPlay state changes are slow
+    const timeoutMs = (type === 'PLAY_STATUS') ? 12000 : 8000;
+    EXPECTATIONS[ip] = { type, value, context: extraContext, expires: Date.now() + timeoutMs };
     console.log(`[DeviceState] 🔒 UI Locked for ${ip}: Waiting for ${type}...`);
     FINAL_STATE[ip].readyForDisplay = false; 
 }
@@ -866,7 +1046,9 @@ module.exports = {
     initDevice,
     get,
     setExpectation,
-    clearSession
+    clearSession,
+    setAirplayPauseIntent,
+    clearAirplayPauseIntent
 };
  
 // =================================================================
@@ -877,11 +1059,31 @@ module.exports = {
 // =================================================================
 setInterval(async () => {
     for (const [ip, state] of Object.entries(FINAL_STATE)) {
-        
+
         // --- VIRTUAL WEBSOCKET FOR POISONED DEVICES ---
         // If the socket crashed, the speaker stops pushing XML events.
         // force a poll to catch Pause/Play clicks and clear UI locks!
         if (POISONED_DEVICES[ip]) {
+            await processSettledState(ip);
+        }
+
+        // --- PLAY_STATUS LOCK RESOLVER ---
+        // Bose WebSocket does not emit nowPlayingUpdated when paused via UPnP AVTransport.
+        // When a PLAY_PAUSE lock is pending on a MASS-driven speaker, poll the Bose HTTP API
+        // directly to force-refresh the native cache, then evaluate the expectation lock.
+        if (EXPECTATIONS[ip] && EXPECTATIONS[ip].type === 'PLAY_STATUS' && state && state.massIsActiveDriver) {
+            try {
+                const parser = new xml2js.Parser({ explicitArray: false });
+                const npRes = await axios.get(`http://${ip}:8090/now_playing`, { timeout: 2000 }).catch(() => null);
+                if (npRes && npRes.data) {
+                    let cleanXml = npRes.data.replace(/�/g, 'a').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+                    const npData = await parser.parseStringPromise(cleanXml);
+                    if (npData.nowPlaying && npData.nowPlaying.playStatus !== undefined) {
+                        NATIVE_CACHE[ip].nowPlaying = npData.nowPlaying;
+                        NATIVE_CACHE[ip].playStatus = npData.nowPlaying.playStatus;
+                    }
+                }
+            } catch (e) {}
             await processSettledState(ip);
         }
 

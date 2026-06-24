@@ -43,7 +43,7 @@ async function evaluateHandshake(ip) {
     // Evaluate success condition once to keep the code below clean and readable
     const isSuccess = state.presets && state.sourceProviders && state.bmx;
 
-    if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.includes(ip)) {
+    if (global.WATCHDOG_SPEAKERS?.includes(ip)) {
         utils.appendWatchdogLog(ip, {
             ts:      new Date().toISOString(),
             type:    'handshake_result',
@@ -228,7 +228,7 @@ router.use((req, res, next) => {
     // Watchdog observe mode: log every cloud hit for monitored speakers.
     // Globals are kept in sync by updateWatchdogGlobals() (called on startup
     // and after every settings save) so this check is a pure memory read.
-    if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS)) {
+    if (Array.isArray(global.WATCHDOG_SPEAKERS)) {
         const reqIp = getIp(req);
         if (global.WATCHDOG_SPEAKERS.includes(reqIp)) {
             const rawBody = req.body
@@ -329,7 +329,7 @@ router.get('/streaming/account/:id/full', async (req, res) => {
     const identity = await getSpeakerIdentity(reqIp);
     if (identity.deviceId === "UNKNOWN") {
         console.log(`[Bose Cloud] ⚠️ Account Profile FAILED for ${reqIp} — speaker identity unresolvable (port 8090 not ready). Returned 503. Presets NOT delivered.`);
-        if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.includes(reqIp)) {
+        if (global.WATCHDOG_SPEAKERS?.includes(reqIp)) {
             utils.appendWatchdogLog(reqIp, { ts: new Date().toISOString(), type: 'account_profile_failed', reason: 'speaker identity unresolvable (port 8090 not ready)' });
         }
         return res.status(503).send("Speaker Busy");

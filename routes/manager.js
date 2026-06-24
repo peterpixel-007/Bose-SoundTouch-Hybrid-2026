@@ -569,6 +569,7 @@ router.get('/manager/recents', async(req, res) => {
                 provider: (i.provider_mappings?.[0]?.provider_domain) || i.provider || 'unknown'
             };
         });
+
         res.json(results);
     } catch (e) {
         res.json([]);

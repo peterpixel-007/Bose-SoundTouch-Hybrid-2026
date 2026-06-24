@@ -96,6 +96,17 @@ function getHybridPresetDefinitions() {
     return definitions;
 }
 
+// Synchronous inline check used by the nowSelectionUpdated WebSocket handler in device_state.js.
+// Returns true when the ContentItem in the event is one of our own bridge preset URLs, meaning
+// the bridge will handle the press via the /preset/:id.mp3 HTTP route — no MASS call needed here.
+function isHybridContentItem(source, location) {
+    const APP_IP   = process.env.APP_IP;
+    const APP_PORT = process.env.APP_PORT;
+    return source === 'LOCAL_INTERNET_RADIO' &&
+           typeof location === 'string' &&
+           location.includes(`${APP_IP}:${APP_PORT}/preset/`);
+}
+
 // --- PRESET HEALTH CHECKS ---
 // speakerHasPresets: slot existence only (used by legacy callers and as a base check)
 // speakerHasHybridPresets: stricter — confirms slots contain LOCAL_INTERNET_RADIO URLs
@@ -193,7 +204,7 @@ function appendWatchdogLog(ip, entry) {
 
 // --- WATCHDOG OBSERVE: 5-MINUTE PRESET SNAPSHOT ---
 async function queryPresetsForSpeaker(ip, phase = null) {
-    if (!(global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.includes(ip))) return;
+    if (!global.WATCHDOG_SPEAKERS?.includes(ip)) return;
     const parser = new xml2js.Parser({ explicitArray: false });
     const entry = { ts: new Date().toISOString(), type: 'preset_snapshot', ...(phase ? { phase } : {}), presets: [] };
 
@@ -221,14 +232,13 @@ async function queryPresetsForSpeaker(ip, phase = null) {
 }
 
 // --- WATCHDOG: SYNC GLOBALS FROM SETTINGS ---
-// Called on startup and after every settings save so bose_cloud.js middleware
-// can check global.WATCHDOG_SPEAKERS / global.WATCHDOG_MODE without disk reads.
+// Called on startup and after every settings save so all modules
+// can check global.WATCHDOG_SPEAKERS without disk reads.
 function updateWatchdogGlobals() {
     const settingsPath = path.join(process.cwd(), 'config', 'settings.json');
     try {
         const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
         global.WATCHDOG_SPEAKERS = Array.isArray(settings.presetWatchdogSpeakers) ? settings.presetWatchdogSpeakers : [];
-        global.WATCHDOG_MODE = settings.presetWatchdogMode || 'push';
     } catch (e) {
         console.error('[Watchdog] Failed to sync globals from settings:', e.message);
     }
@@ -340,35 +350,23 @@ function startScheduler() {
                 await runSystemRestart(RESTART_HOUR, RESTART_MINUTE);
             }
         }
-        // 3. PRESET WATCHDOG (rolling interval — not tied to a fixed hour like Audit/Restart)
+        // 3. PRESET WATCHDOG (observe mode — rolling interval, not tied to a fixed hour)
         const watchdogSpeakers = Array.isArray(settings.presetWatchdogSpeakers) ? settings.presetWatchdogSpeakers : [];
-        const watchdogMode = settings.presetWatchdogMode || 'push';
 
         if (watchdogSpeakers.length > 0) {
-            if (watchdogMode === 'push') {
-                const intervalMs = (settings.presetWatchdogIntervalMinutes ?? 60) * 60000;
-                if (Date.now() - lastWatchdogRunMs >= intervalMs) {
-                    lastWatchdogRunMs = Date.now();
-                    console.log(`\n[Scheduler] 🔁 Preset Watchdog (Push): refreshing presets on ${watchdogSpeakers.length} speaker(s)...`);
-                    for (const ip of watchdogSpeakers) {
-                        await pushPresetsToSpeaker(ip);
-                    }
+            // Hourly heartbeat — always visible so you know the watchdog is alive
+            if (Date.now() - lastObserveHourlyLogMs >= 60 * 60000) {
+                lastObserveHourlyLogMs = Date.now();
+                console.log(`[Watchdog] 👁️  Monitoring ${watchdogSpeakers.length} speaker(s). Querying every 5 min, logging to watchdog_*.json.`);
+            }
+            // Query every 5 min
+            if (Date.now() - lastObserveRunMs >= 5 * 60000) {
+                lastObserveRunMs = Date.now();
+                if (global.DEBUG_MODE) {
+                    console.log(`\n[Scheduler] 🔍 Preset Watchdog: querying ${watchdogSpeakers.length} speaker(s)...`);
                 }
-            } else if (watchdogMode === 'observe') {
-                // Hourly heartbeat — always visible so you know observe mode is alive
-                if (Date.now() - lastObserveHourlyLogMs >= 60 * 60000) {
-                    lastObserveHourlyLogMs = Date.now();
-                    console.log(`[Watchdog] 👁️  Observe mode active: monitoring ${watchdogSpeakers.length} speaker(s). Querying every 5 min, logging to watchdog_*.json.`);
-                }
-                // Per-query detail — debug only (fires every 5 min)
-                if (Date.now() - lastObserveRunMs >= 5 * 60000) {
-                    lastObserveRunMs = Date.now();
-                    if (global.DEBUG_MODE) {
-                        console.log(`\n[Scheduler] 🔍 Preset Watchdog (Observe): querying ${watchdogSpeakers.length} speaker(s)...`);
-                    }
-                    for (const ip of watchdogSpeakers) {
-                        await queryPresetsForSpeaker(ip);
-                    }
+                for (const ip of watchdogSpeakers) {
+                    await queryPresetsForSpeaker(ip);
                 }
             }
         }
@@ -520,6 +518,7 @@ module.exports = {
     powerOffAllSpeakers,
     executeSmartShutdown,
     scheduleProviderReload,
+    isHybridContentItem,
     speakerHasPresets,
     speakerHasHybridPresets,
     getHybridPresetDefinitions,

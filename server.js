@@ -1,9 +1,10 @@
 // ============================================================================
 // PHASE 1: IMPORTS & CONSTANTS
 // ============================================================================
-const CURRENT_VERSION = "v3.6.8";
-const ENV_SCHEMA_VERSION = "v3.5"; 
-const minReq = [2, 9, 1]; //MASS VERSION
+const CURRENT_VERSION = "v3.7";
+const ENV_SCHEMA_VERSION = "v3.5";
+const SETTINGS_SCHEMA_VERSION = "v3.7";
+const minReq = [2, 9, 3]; //MASS VERSION
 let UPDATE_CACHED_DATA = { updateAvailable: false, current: CURRENT_VERSION };
 const express = require('express');
 const fs = require('fs');
@@ -59,7 +60,7 @@ function captureLog(type, args) {
 console.log = function() {
     captureLog('INFO', arguments);
     originalLog.apply(console, arguments);
-    if (global.WATCHDOG_MODE === 'observe' && Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.length > 0) {
+    if (Array.isArray(global.WATCHDOG_SPEAKERS) && global.WATCHDOG_SPEAKERS.length > 0) {
         const msg = Array.from(arguments).map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
         for (const ip of global.WATCHDOG_SPEAKERS) {
             if (msg.includes(ip)) {
@@ -159,56 +160,42 @@ const DEFAULT_SEARCH_MENU_ORDER = [
     { key: 'filesystem_local', name: 'Local NAS',    icon: '/images/nas_icon.png',     enabled: true, sourceType: 'music'  }
 ];
 
-const LEGACY_SEARCH_MENU_MAP = {
-    'global': { name: 'Global',       icon: null,                       sourceType: 'global' },
-    'radio':  { name: 'TuneIn Radio', icon: '/images/TuneIn_icon.png',  sourceType: 'radio',  key: 'tunein'           },
-    'nas':    { name: 'Local NAS',    icon: '/images/nas_icon.png',     sourceType: 'music',  key: 'filesystem_local' },
-    'spotify':{ name: 'Spotify',      icon: '/images/spotify_icon.png', sourceType: 'music'   }
+const DEFAULT_SETTINGS = {
+    schemaVersion: SETTINGS_SCHEMA_VERSION,
+    autoResumePreset: false,
+    autoRestartMass: false,
+    autoSyncVolume: false,
+    mobileAutoSortSpeakers: true,
+    scheduledSpeakerAudit: true,
+    scheduledAuditHour: 2,
+    scheduledRestart: false,
+    scheduledRestartHour: 3,
+    includeReboot: false,
+    doubleTapPresets: false,
+    restrictedMode: false,
+    adminPin: "",
+    scheduledPlays: [],
+    presetWatchdogSpeakers: [],
+    searchMenuOrder: DEFAULT_SEARCH_MENU_ORDER
 };
 
 if (!fs.existsSync(settingsPath)) {
-    console.log(`[Boot] settings.json not found. Generating default preferences...`);
-    const defaultSettings = {
-        autoResumePreset: false,
-        autoRestartMass: false,
-        autoSyncVolume: false,
-        mobileAutoSortSpeakers: true,
-        scheduledSpeakerAudit: true,
-        scheduledAuditHour: 2,
-        scheduledRestart: false,
-        scheduledRestartHour: 3,
-        includeReboot: false,
-        scheduledPlays: [],
-        bypassCloudEmulation: false,
-        presetWatchdogSpeakers: [],
-        presetWatchdogIntervalMinutes: 60,
-        presetWatchdogMode: 'push',
-        searchMenuOrder: DEFAULT_SEARCH_MENU_ORDER
-    };
-    fs.writeFileSync(settingsPath, JSON.stringify(defaultSettings, null, 4));
+    console.log(`[Boot] settings.json not found. Generating defaults...`);
+    fs.writeFileSync(settingsPath, JSON.stringify(DEFAULT_SETTINGS, null, 4));
 } else {
-    // Migrate legacy flat string array to v2 object format if needed
     try {
         const existing = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        if (Array.isArray(existing.searchMenuOrder) && typeof existing.searchMenuOrder[0] === 'string') {
-            console.log(`[Boot] settings.json: migrating searchMenuOrder to v2 object format...`);
-            existing.searchMenuOrder = existing.searchMenuOrder.map(legacyKey => {
-                const map = LEGACY_SEARCH_MENU_MAP[legacyKey];
-                return {
-                    key:        map?.key        || legacyKey,
-                    name:       map?.name       || legacyKey,
-                    icon:       map?.icon       || null,
-                    enabled:    true,
-                    sourceType: map?.sourceType || 'music'
-                };
-            });
-            fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 4));
-            console.log(`[Boot] settings.json: searchMenuOrder migration complete.`);
+        if (existing.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
+            console.log(`[Boot] settings.json schema mismatch (found: ${existing.schemaVersion || 'none'}, expected: ${SETTINGS_SCHEMA_VERSION}). Backing up to settings.json.bak...`);
+            fs.renameSync(settingsPath, path.join(USER_ROOT, 'settings.json.bak'));
+            fs.writeFileSync(settingsPath, JSON.stringify(DEFAULT_SETTINGS, null, 4));
+            console.log(`[Boot] Fresh settings.json written. Old config saved to config/settings.json.bak.`);
         } else {
-            console.log(`[Boot] settings.json already exists. Skipping generation.`);
+            console.log(`[Boot] settings.json schema ${SETTINGS_SCHEMA_VERSION} OK.`);
         }
     } catch (e) {
-        console.error(`[Boot] settings.json migration failed:`, e.message);
+        console.error(`[Boot] settings.json read error — regenerating defaults:`, e.message);
+        fs.writeFileSync(settingsPath, JSON.stringify(DEFAULT_SETTINGS, null, 4));
     }
 }
 
@@ -512,7 +499,22 @@ if (!isReady) {
           // STEP 6: Smart Polling & Configuration Injection        
             const { enforcePlayerConfigs } = require('./routes/mass_utils');
             await enforcePlayerConfigs(ALIVE_SPEAKERS);
-            console.log(`-------------------------------------------------------------------------`);            
+            console.log(`-------------------------------------------------------------------------`);
+            console.log(`[Boot] 🔥 Prefetching recently played items to warm MASS cache...`);
+
+            // Fire-and-forget: warms MASS's recently-played index so the first Recents
+            // tab load in the UI is fast. Result is intentionally discarded.
+            (async () => {
+                try {
+                    const massCore = require('./routes/mass');
+                    const token = await massCore.getToken();
+                    await axios.post(
+                        `http://${process.env.MASS_IP}:${process.env.MASS_PORT || 8095}/api`,
+                        { command: 'music/recently_played_items', args: { limit: 100, media_types: ['track', 'album', 'playlist', 'radio'] }, message_id: Date.now() },
+                        { headers: { Authorization: `Bearer ${token}` } }
+                    );
+                } catch (e) {}
+            })();
 
         } else {
             console.log(`\n[Boot] ⚠️ Music Assistant failed to report online after restart.\n`);

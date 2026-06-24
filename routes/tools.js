@@ -26,11 +26,13 @@ function getSettings() {
         scheduledSpeakerAudit: true,
         scheduledRestart: false,
         includeReboot: false,
-        bypassCloudEmulation: false,
+        doubleTapPresets: false,
         presetWatchdogSpeakers: [],
-        presetWatchdogIntervalMinutes: 60,
-        presetWatchdogMode: 'push',
-        searchMenuOrder: ['global', 'radio', 'nas']
+        searchMenuOrder: [
+            { key: 'global',           name: 'Global',       icon: null,                       enabled: true, sourceType: 'global' },
+            { key: 'tunein',           name: 'TuneIn Radio', icon: '/images/TuneIn_icon.png',  enabled: true, sourceType: 'radio'  },
+            { key: 'filesystem_local', name: 'Local NAS',    icon: '/images/nas_icon.png',     enabled: true, sourceType: 'music'  }
+        ]
     };
 }
 
@@ -82,6 +84,31 @@ router.get('/admin/system_versions', (req, res) => {
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
+});
+
+// --- RESTRICTED ACCESS SESSION STORE (cleared on server restart) ---
+const ADMIN_SESSIONS = new Set();
+
+router.post('/admin/verify-pin', (req, res) => {
+    const { pin, token } = req.body;
+    if (!pin || !token) return res.status(400).json({ success: false, error: 'Missing pin or token' });
+    const settings = getSettings();
+    if (!settings.restrictedMode || !settings.adminPin) return res.json({ success: true });
+    if (pin !== settings.adminPin) {
+        console.log(`[Tools] 🔐 Failed admin unlock attempt`);
+        return res.json({ success: false });
+    }
+    ADMIN_SESSIONS.add(token);
+    console.log(`[Tools] 🔓 Admin session unlocked (token: ...${token.slice(-6)})`);
+    res.json({ success: true });
+});
+
+router.get('/admin/check-session', (req, res) => {
+    const { token } = req.query;
+    const settings = getSettings();
+    if (!settings.restrictedMode) return res.json({ valid: true });
+    if (!token) return res.json({ valid: false });
+    res.json({ valid: ADMIN_SESSIONS.has(token) });
 });
 
 // --- TOGGLE VERBOSE DEBUG ---

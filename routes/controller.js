@@ -44,9 +44,14 @@ async function handleMassTransport(ip, key, currentState) {
         
         if (isActuallyPlaying) {
             console.log(`[Control] Speaker is Playing. Sending explicit PAUSE.`);
+            if (currentState.source === 'AIRPLAY') {
+                deviceState.setAirplayPauseIntent(ip);
+                console.log(`[Control] 💾 AirPlay pause intent saved (session will terminate).`);
+            }
             await mass.pause(ip);
         } else {
             console.log(`[Control] Speaker is Silent. Sending explicit RESUME/PLAY.`);
+            deviceState.clearAirplayPauseIntent(ip);
             await mass.play(ip);
         }
     }
@@ -317,7 +322,7 @@ router.post('/play_content', async(req, res) => {
 });
 
 router.post('/join', async(req, res) => {
-    const { slaveIp } = req.body;
+    const { slaveIp, targetMasterIp } = req.body;
     if (SYNC_LOCKS.has(slaveIp)) return res.send({ success: false, message: "Sync Busy" });
     SYNC_LOCKS.add(slaveIp);
 
@@ -339,29 +344,41 @@ router.post('/join', async(req, res) => {
 
     try {
         let masterIp = null, masterMac = null;
-        const candidates = [];
 
-        for (const d of SPEAKERS) {
-            if (d.ip === slaveIp) continue;
-            try {
-                const state = await deviceState.get(d);
-                if (state && !state.isStandby) {
-                    const zoneMaster = state.zone ? state.zone.master : null;
-                    const myMac = state.mac;
-                    if (!zoneMaster || zoneMaster === myMac) {
-                        candidates.push({ ...d, mac: myMac, playing: (state.playStatus === 'PLAY_STATE') });
-                    }
+        if (targetMasterIp) {
+            // User explicitly chose a target from the picker — resolve directly
+            const targetDevice = SPEAKERS.find(s => s.ip === targetMasterIp);
+            if (targetDevice) {
+                const targetState = await deviceState.get(targetDevice);
+                if (targetState && !targetState.isStandby && targetState.mac) {
+                    masterIp = targetMasterIp;
+                    masterMac = targetState.mac;
                 }
-            } catch (e) {}
-        }
-
-        const playingCandidate = candidates.find(c => c.playing);
-        if (playingCandidate) {
-            masterIp = playingCandidate.ip;
-            masterMac = playingCandidate.mac;
-        } else if (candidates.length > 0) {
-            masterIp = candidates[0].ip;
-            masterMac = candidates[0].mac;
+            }
+        } else {
+            // Auto-pick: find the best eligible master (existing behavior)
+            const candidates = [];
+            for (const d of SPEAKERS) {
+                if (d.ip === slaveIp) continue;
+                try {
+                    const state = await deviceState.get(d);
+                    if (state && !state.isStandby) {
+                        const zoneMaster = state.zone ? state.zone.master : null;
+                        const myMac = state.mac;
+                        if (!zoneMaster || zoneMaster === myMac) {
+                            candidates.push({ ...d, mac: myMac, playing: (state.playStatus === 'PLAY_STATE') });
+                        }
+                    }
+                } catch (e) {}
+            }
+            const playingCandidate = candidates.find(c => c.playing);
+            if (playingCandidate) {
+                masterIp = playingCandidate.ip;
+                masterMac = playingCandidate.mac;
+            } else if (candidates.length > 0) {
+                masterIp = candidates[0].ip;
+                masterMac = candidates[0].mac;
+            }
         }
 
         if (!masterIp) {
@@ -417,13 +434,18 @@ router.post('/join', async(req, res) => {
         // forces its hardware to use AV-grade kernel timestamping. This locks the internal 
         // clocks of the Master and Slave together, preventing the "hallway echo" effect.
         // =================================================================================
+        // Use addZoneSlave when the master already has members (documented Bose spec);
+        // setZone for a new group. Both accept the same XML payload.
+        const masterDevice = SPEAKERS.find(s => s.ip === masterIp);
+        const masterState = masterDevice ? await deviceState.get(masterDevice) : null;
+        const masterHasSlaves = masterState && masterState.zone && masterState.zone.member &&
+            (Array.isArray(masterState.zone.member) ? masterState.zone.member.length > 0 : !!masterState.zone.member);
+        const zoneEndpoint = masterHasSlaves ? 'addZoneSlave' : 'setZone';
+
         setTimeout(() => {
-            // High-priority latency lock for Master
             sendBoseXml(masterIp, 'rebroadcastlatencymode', '<rebroadcastlatencymode mode="SYNC_TO_ZONE"/>');
-            
-            // Execute the standard group command
             const xml = `<zone master="${masterMac}"><member ipaddress="${slaveIp}">${slaveMac}</member></zone>`;
-            sendBoseXml(masterIp, 'setZone', xml);
+            sendBoseXml(masterIp, zoneEndpoint, xml);
         }, 500);
 
         setTimeout(() => sendBoseXml(slaveIp, 'volume', `<volume>${restoreVol}</volume>`), 3000);

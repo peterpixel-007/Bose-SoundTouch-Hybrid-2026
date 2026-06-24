@@ -718,11 +718,42 @@
   }
 
   // Initiates multi-room grouping.
+  // If multiple eligible masters/standalones exist, shows a picker first.
   function uiJoinGroup(slaveIp) {
+      const candidates = currentDevices.filter(d =>
+          d.ip !== slaveIp &&
+          d.online &&
+          !d.isStandby &&
+          !d.stereoRole &&
+          !(d.zone && d.zone.master && d.zone.master !== d.mac)
+      );
+
+      if (candidates.length < 2) {
+          // 0 candidates: backend will fall back to plain power-on
+          // 1 candidate: fire immediately with that target
+          LockManager.set(slaveIp, 'JOIN', 'MASTER');
+          const body = { slaveIp };
+          if (candidates.length === 1) body.targetMasterIp = candidates[0].ip;
+          sendCommand('/api/join', body);
+          return;
+      }
+
+      // 2+ candidates — build picker and show modal
+      const list = document.getElementById('group-picker-list');
+      list.innerHTML = candidates.map(c => {
+          const isMaster = c.zone && c.zone.master === c.mac && c.zone.member &&
+              (Array.isArray(c.zone.member) ? c.zone.member.length > 0 : !!c.zone.member);
+          const badge = isMaster ? ` <span style="font-size:0.78em; opacity:0.7;">(Group Master)</span>` : '';
+          return `<button class="btn" style="width:100%; margin-bottom:8px; text-align:left;"
+              onmousedown="confirmGroupJoin('${slaveIp}','${c.ip}')">${c.name}${badge}</button>`;
+      }).join('');
+      document.getElementById('group-picker-modal').style.display = 'flex';
+  }
+
+  function confirmGroupJoin(slaveIp, targetMasterIp) {
+      document.getElementById('group-picker-modal').style.display = 'none';
       LockManager.set(slaveIp, 'JOIN', 'MASTER');
-      sendCommand('/api/join', {
-          slaveIp
-      });
+      sendCommand('/api/join', { slaveIp, targetMasterIp });
   }
 
   // --- MAIN VOLUME LOGIC ---
@@ -1051,5 +1082,15 @@
   setInterval(loadStatus, 2000);
   console.log("Bose Hybrid Controller - BACKEND-DRIVEN PAUSE");
 </script>
+
+<div id="group-picker-modal" class="modal" onmousedown="if(event.target===this)this.style.display='none'">
+  <div class="modal-content" style="width:320px; text-align:center;">
+    <h3 style="margin-bottom:16px;">Choose Speaker to Join</h3>
+    <div id="group-picker-list"></div>
+    <button class="btn" style="margin-top:4px; width:100%; opacity:0.6;"
+        onmousedown="document.getElementById('group-picker-modal').style.display='none'">Cancel</button>
+  </div>
+</div>
+
 </body>
 </html>
