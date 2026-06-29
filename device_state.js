@@ -546,7 +546,10 @@ async function initDevice(device) {
         });
     
         ws.on('error', (err) => {
-            if (err.message.includes('UTF-8')) {
+			let rawXml = err.toString('utf8');
+			rawXml = rawXml.replace(/\ufffd/g, 'a').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+			if (global.DEBUG_MODE) console.log(`[DeviceState Err] \ud83d\udd0d WS Raw [${device.ip}]: ${rawXml}`);
+			if (err.message.includes('UTF-8')) {
                 if (!POISONED_DEVICES[device.ip]) {
                     console.log(`[DeviceState] 🧽 Bad metadata from ${device.ip} broke the socket.`);
                     POISONED_DEVICES[device.ip] = true;
