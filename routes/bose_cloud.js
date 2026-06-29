@@ -249,7 +249,6 @@ function generateAccountXml(reqIp, accountId, deviceId, serialNumber, deviceName
 const { spawn } = require('child_process');
 let tcpdumpProcess = null;
 function startCapture(ip) {
-  //sudo tcpdump -i any -A -n 'tcp port 8090'
   tcpdumpProcess = spawn('tcpdump', [
     '-i', 'any',
     '-n',
@@ -265,7 +264,12 @@ function startCapture(ip) {
     console.error(`tcpdump error: ${data}`);
   });
 }
-
+function stopCapture() {
+  if (tcpdumpProcess) {
+    tcpdumpProcess.kill('SIGINT');
+    console.log('Capture stopped');
+  }
+}
 function stopCapture() {
   if (tcpdumpProcess) {
     tcpdumpProcess.kill('SIGINT'); // clean stop
