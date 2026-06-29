@@ -438,11 +438,7 @@ router.post(/^\/v1\/scmudc.*/, (req, res) => {
     console.log(`[scmudc] 📡 Telemetry from ${getIp(req)}: ${JSON.stringify(req.body)}`);
 	// No info in the message, <userActivityUpdate deviceID="9884E384F8B2" />
     res.status(200).send();
-    if (!handshakeTracker[reqIp]) {
-        handshakeTracker[reqIp] = { powerOn: false, bmx: false, sourceProviders: false, presets: false };
-        setTimeout(() => evaluateHandshake(reqIp), 30000);
-        utils.queryPresetsForSpeaker(reqIp, 'before');
-    }
+    utils.queryPresetsForSpeaker(reqIp, 'scmudc');
 });
 router.get(/^\/updates.*/, (req, res) => res.status(404).send("Not Found"));
 
