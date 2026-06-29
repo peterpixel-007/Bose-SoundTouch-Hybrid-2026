@@ -418,6 +418,7 @@ async function initDevice(device) {
         activeWs = ws; // Save to global scope so watchdog can access it
 
         ws.on('open', () => {
+	        if (global.DEBUG_MODE) console.log(`[DeviceState] \ud83d\udd0d WS Raw [${device.ip}]: WebSocket OPEN`);
             if (failedAttempts > 0 && !POISONED_DEVICES[device.ip]) {
                 console.log(`[DeviceState] 🔌 WS Reconnected to ${device.ip}!`);
             }
@@ -546,6 +547,7 @@ async function initDevice(device) {
         });
     
         ws.on('error', (err) => {
+   			if (global.DEBUG_MODE) console.log(`[DeviceState] \ud83d\udd0d WS Raw [${device.ip}]: WebSocket ERROR`);
 			let rawXml = err.toString('utf8');
 			rawXml = rawXml.replace(/\ufffd/g, 'a').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
 			if (global.DEBUG_MODE) console.log(`[DeviceState Err] \ud83d\udd0d WS Raw [${device.ip}]: ${rawXml}`);
@@ -561,6 +563,7 @@ async function initDevice(device) {
         });
     
         ws.on('close', () => {
+   			if (global.DEBUG_MODE) console.log(`[DeviceState] \ud83d\udd0d WS Raw [${device.ip}]: WebSocket CLOSE`);
             setTimeout(fetchInitialAndConnect, reconnectDelay);
             if (reconnectDelay < 15000 && !POISONED_DEVICES[device.ip]) {
                 reconnectDelay = Math.min(reconnectDelay * 2, 15000);
