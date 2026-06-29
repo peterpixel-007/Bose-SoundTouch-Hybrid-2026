@@ -252,8 +252,8 @@ function startCapture(ip) {
   //sudo tcpdump -i any -A -n 'tcp port 8090'
   tcpdumpProcess = spawn('tcpdump', [
     '-i', 'any',
-    '-A', '-n',
-    'tpc port 8090',
+    '-n',
+    'tcp', 'port', '8090',
     '-w', `/tmp/capture-${Date.now()}.pcap`
   ]);
 
