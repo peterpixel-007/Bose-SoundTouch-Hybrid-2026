@@ -264,12 +264,7 @@ function startCapture(ip) {
     console.error(`tcpdump error: ${data}`);
   });
 }
-function stopCapture() {
-  if (tcpdumpProcess) {
-    tcpdumpProcess.kill('SIGINT');
-    console.log('Capture stopped');
-  }
-}
+
 function stopCapture() {
   if (tcpdumpProcess) {
     tcpdumpProcess.kill('SIGINT'); // clean stop
