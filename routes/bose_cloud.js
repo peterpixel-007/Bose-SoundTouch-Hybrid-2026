@@ -435,9 +435,14 @@ router.get('/streaming/account/:id/device/:deviceId/group/', async (req, res) =>
 // Express 5 Native RegExp Catch-Alls
 router.post(/^\/events.*/, (req, res) => res.status(200).send("OK"));
 router.post(/^\/v1\/scmudc.*/, (req, res) => {
-    //console.log(`[scmudc] 📡 Telemetry from ${getIp(req)}: ${JSON.stringify(req.body)}`);
-	// This is all you get so nothing actionable to use here  WS Raw [192.168.4.48]: <userActivityUpdate deviceID="9884E384F8B2" />
+    console.log(`[scmudc] 📡 Telemetry from ${getIp(req)}: ${JSON.stringify(req.body)}`);
+	// No info in the message, <userActivityUpdate deviceID="9884E384F8B2" />
     res.status(200).send();
+    if (!handshakeTracker[reqIp]) {
+        handshakeTracker[reqIp] = { powerOn: false, bmx: false, sourceProviders: false, presets: false };
+        setTimeout(() => evaluateHandshake(reqIp), 30000);
+        utils.queryPresetsForSpeaker(reqIp, 'before');
+    }
 });
 router.get(/^\/updates.*/, (req, res) => res.status(404).send("Not Found"));
 
