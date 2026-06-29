@@ -480,7 +480,6 @@ router.post(/^\/v1\/scmudc.*/, (req, res) => {
   }
 });
 
-});
 router.get(/^\/updates.*/, (req, res) => res.status(404).send("Not Found"));
 
 // Standard Express 5 Parameter Routes
