@@ -246,6 +246,33 @@ function generateAccountXml(reqIp, accountId, deviceId, serialNumber, deviceName
     return fullXml;
 }
 
+const { spawn } = require('child_process');
+let tcpdumpProcess = null;
+function startCapture(ip) {
+  //sudo tcpdump -i any -A -n 'tcp port 8090'
+  tcpdumpProcess = spawn('tcpdump', [
+    '-i', 'any',
+    '-A', '-n',
+    'tpc port 8090',
+    '-w', `/tmp/capture-${Date.now()}.pcap`
+  ]);
+
+  tcpdumpProcess.stdout.on('data', data => {
+    console.log(`tcpdump: ${data}`);
+  });
+
+  tcpdumpProcess.stderr.on('data', data => {
+    console.error(`tcpdump error: ${data}`);
+  });
+}
+
+function stopCapture() {
+  if (tcpdumpProcess) {
+    tcpdumpProcess.kill('SIGINT'); // clean stop
+    console.log('Capture stopped');
+  }
+}
+
 // ============================================================================
 // MIDDLEWARE & ROUTING
 // ============================================================================
@@ -298,6 +325,10 @@ router.post('/streaming/support/power_on', (req, res) => {
         utils.queryPresetsForSpeaker(reqIp, 'before');
     }
     handshakeTracker[reqIp].powerOn = true;
+    startCapture('192.168.1.100');
+    // capture for 5 seconds
+    setTimeout(stopCapture, 5000);
+
 });
 
 // 2. BMX Registry (Cloud Routing)
@@ -434,11 +465,17 @@ router.get('/streaming/account/:id/device/:deviceId/group/', async (req, res) =>
 
 // Express 5 Native RegExp Catch-Alls
 router.post(/^\/events.*/, (req, res) => res.status(200).send("OK"));
+
 router.post(/^\/v1\/scmudc.*/, (req, res) => {
     console.log(`[scmudc] 📡 Telemetry from ${getIp(req)}: ${JSON.stringify(req.body)}`);
-	// No info in the message, <userActivityUpdate deviceID="9884E384F8B2" />
     res.status(200).send();
     utils.queryPresetsForSpeaker(reqIp, 'scmudc');
+    startCapture('192.168.1.100');
+    // capture for 10 seconds
+    setTimeout(stopCapture, 10000);
+  }
+});
+
 });
 router.get(/^\/updates.*/, (req, res) => res.status(404).send("Not Found"));
 
