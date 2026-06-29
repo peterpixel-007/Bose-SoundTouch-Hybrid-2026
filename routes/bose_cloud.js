@@ -477,8 +477,7 @@ router.post(/^\/v1\/scmudc.*/, (req, res) => {
     startCapture('192.168.1.100');
     // capture for 10 seconds
     setTimeout(stopCapture, 10000);
-  }
-});
+  });
 
 router.get(/^\/updates.*/, (req, res) => res.status(404).send("Not Found"));
 
