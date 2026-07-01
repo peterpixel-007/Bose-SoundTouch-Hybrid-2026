@@ -249,12 +249,15 @@ function generateAccountXml(reqIp, accountId, deviceId, serialNumber, deviceName
 const { spawn } = require('child_process');
 let tcpdumpProcess = null;
 function startCapture(ip) {
-  tcpdumpProcess = spawn('tcpdump', [
-    '-i', 'eth0',
-    '-n',
-    'tcp', 'port', '8090',
-    '-w', `/tmp/capture-${Date.now()}.pcap`
-  ]);
+tcpdumpProcess = spawn('tcpdump', [
+  '-i', 'eth0',
+  '-n',
+  '-A',
+  '-s', '0',
+  '-l',
+  '-U',
+  'tcp', 'port', '8090'
+]);
 
   tcpdumpProcess.stdout.on('data', data => {
     console.log(`tcpdump: ${data}`);
