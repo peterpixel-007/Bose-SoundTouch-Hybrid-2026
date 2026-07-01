@@ -250,7 +250,7 @@ const { spawn } = require('child_process');
 let tcpdumpProcess = null;
 function startCapture(ip) {
   tcpdumpProcess = spawn('tcpdump', [
-    '-i', 'any',
+    '-i', 'eth0',
     '-n',
     'tcp', 'port', '8090',
     '-w', `/tmp/capture-${Date.now()}.pcap`
