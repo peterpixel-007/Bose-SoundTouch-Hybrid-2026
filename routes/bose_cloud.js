@@ -255,7 +255,7 @@ tcpdumpProcess = spawn('tcpdump', [
   '-A',
   '-s', '0',
   '-l',
-  '-U',
+  '-q',
   'tcp', 'port', '8090'
 ]);
 
@@ -263,9 +263,9 @@ tcpdumpProcess = spawn('tcpdump', [
     console.log(`tcpdump: ${data}`);
   });
 
-  tcpdumpProcess.stderr.on('data', data => {
-    console.error(`tcpdump error: ${data}`);
-  });
+  //tcpdumpProcess.stderr.on('data', data => {
+	// console.error(`tcpdump error: ${data}`);
+  //});
 }
 
 function stopCapture() {
